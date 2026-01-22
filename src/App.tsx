@@ -1,6 +1,6 @@
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 type Block = {
   type: 'text' | 'tool_use' | 'tool_result' | 'reasoning' | 'attachment' | 'other'
@@ -135,17 +135,22 @@ export default function App() {
   const [dirError, setDirError] = useState<string | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [conversationSearchOpen, setConversationSearchOpen] = useState(false)
+  const [conversationSearchQuery, setConversationSearchQuery] = useState('')
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({})
   const [expandedStacks, setExpandedStacks] = useState<Record<string, boolean>>({})
   const [isProcessing, setIsProcessing] = useState(false)
   const [inputText, setInputText] = useState('')
   const [pendingFiles, setPendingFiles] = useState<{ name: string; content: string }[]>([])
   const [wsStatus, setWsStatus] = useState<'connecting' | 'open' | 'closed'>('connecting')
+  const [isAtTop, setIsAtTop] = useState(true)
+  const [isAtBottom, setIsAtBottom] = useState(true)
 
   const wsRef = useRef<WebSocket | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const conversationSearchInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     const ws = new WebSocket(WS_URL)
@@ -219,17 +224,47 @@ export default function App() {
     }
   }, [])
 
+  const updateScrollState = useCallback(() => {
+    const node = scrollRef.current
+    if (!node) return
+    const threshold = 12
+    const atTop = node.scrollTop <= threshold
+    const atBottom = node.scrollTop + node.clientHeight >= node.scrollHeight - threshold
+    setIsAtTop(atTop)
+    setIsAtBottom(atBottom)
+  }, [])
+
+  useEffect(() => {
+    const node = scrollRef.current
+    if (!node) return
+    const handleScroll = () => updateScrollState()
+    updateScrollState()
+    node.addEventListener('scroll', handleScroll, { passive: true })
+    window.addEventListener('resize', updateScrollState)
+    return () => {
+      node.removeEventListener('scroll', handleScroll)
+      window.removeEventListener('resize', updateScrollState)
+    }
+  }, [updateScrollState])
+
   useEffect(() => {
     const node = scrollRef.current
     if (!node) return
     node.scrollTop = node.scrollHeight
-  }, [messages, isProcessing])
+    updateScrollState()
+  }, [messages, isProcessing, updateScrollState])
 
   useEffect(() => {
     if (searchOpen) {
       searchInputRef.current?.focus()
     }
   }, [searchOpen])
+
+  useEffect(() => {
+    if (conversationSearchOpen) {
+      conversationSearchInputRef.current?.focus()
+    }
+  }, [conversationSearchOpen])
 
   const canSend = useMemo(() => {
     return inputText.trim().length > 0 || pendingFiles.length > 0
@@ -245,6 +280,15 @@ export default function App() {
     }
     return Array.from(map.values())
   }, [conversations])
+
+  const filteredConversations = useMemo(() => {
+    const query = conversationSearchQuery.trim().toLowerCase()
+    if (!query) return uniqueConversations
+    return uniqueConversations.filter((conversation) => {
+      const haystack = `${conversation.firstPrompt} ${conversation.project} ${conversation.sessionId}`.toLowerCase()
+      return haystack.includes(query)
+    })
+  }, [conversationSearchQuery, uniqueConversations])
 
   const filteredDirEntries = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
@@ -316,10 +360,14 @@ export default function App() {
       })
     )
     setDrawerOpen(false)
+    setConversationSearchOpen(false)
+    setConversationSearchQuery('')
   }
 
   const handleNewConversation = () => {
     setDrawerOpen(false)
+    setConversationSearchOpen(false)
+    setConversationSearchQuery('')
     setProjectPickerOpen(true)
     setSearchOpen(false)
     setSearchQuery('')
@@ -354,6 +402,32 @@ export default function App() {
 
   const handleClearSearch = () => {
     setSearchQuery('')
+  }
+
+  const handleToggleConversationSearch = () => {
+    setConversationSearchOpen((prev) => {
+      const next = !prev
+      if (!next) {
+        setConversationSearchQuery('')
+      }
+      return next
+    })
+  }
+
+  const handleClearConversationSearch = () => {
+    setConversationSearchQuery('')
+  }
+
+  const scrollToTop = () => {
+    const node = scrollRef.current
+    if (!node) return
+    node.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const scrollToBottom = () => {
+    const node = scrollRef.current
+    if (!node) return
+    node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
   }
 
   const toggleTool = (id: string) => {
@@ -500,12 +574,38 @@ export default function App() {
           setDrawerOpen(false)
           setProjectPickerOpen(false)
           setSearchOpen(false)
+          setConversationSearchOpen(false)
+          setConversationSearchQuery('')
         }}
       />
       <aside className={drawerOpen ? 'drawer open' : 'drawer'}>
         <div className="drawer-header">Conversations</div>
+        {conversationSearchOpen ? (
+          <div className="drawer-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" strokeWidth="2" />
+              <line x1="16" y1="16" x2="21" y2="21" stroke="currentColor" strokeWidth="2" />
+            </svg>
+            <input
+              ref={conversationSearchInputRef}
+              value={conversationSearchQuery}
+              onChange={(event) => setConversationSearchQuery(event.target.value)}
+              placeholder="Search conversations"
+            />
+            {conversationSearchQuery ? (
+              <button
+                type="button"
+                className="icon-button"
+                onClick={handleClearConversationSearch}
+                aria-label="Clear search"
+              >
+                x
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <div className="conversation-list">
-          {uniqueConversations.map((conversation) => (
+          {filteredConversations.map((conversation) => (
             <button
               key={conversation.sessionId}
               type="button"
@@ -522,7 +622,22 @@ export default function App() {
               </div>
             </button>
           ))}
+          {filteredConversations.length === 0 ? (
+            <div className="conversation-empty">No conversations found.</div>
+          ) : null}
         </div>
+        <button
+          type="button"
+          className="drawer-search-toggle"
+          onClick={handleToggleConversationSearch}
+          aria-label="Search conversations"
+          aria-pressed={conversationSearchOpen}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" strokeWidth="2" />
+            <line x1="16" y1="16" x2="21" y2="21" stroke="currentColor" strokeWidth="2" />
+          </svg>
+        </button>
       </aside>
 
       <section className={projectPickerOpen ? 'project-picker open' : 'project-picker'}>
@@ -532,16 +647,9 @@ export default function App() {
             <div className="project-breadcrumbs">
               {dirPath ? (
                 <>
-                  <button
-                    type="button"
-                    className="crumb-button"
-                    onClick={() => requestDirList('/', { resetSearch: true })}
-                  >
-                    /
-                  </button>
-                  {breadcrumbs.map((crumb) => (
+                  {breadcrumbs.map((crumb, index) => (
                     <span key={crumb.path} className="crumb">
-                      <span className="crumb-sep">/</span>
+                      {index > 0 ? <span className="crumb-sep">/</span> : null}
                       <button
                         type="button"
                         className="crumb-button"
@@ -752,6 +860,41 @@ export default function App() {
           </div>
         ) : null}
       </main>
+
+      {!overlayOpen && !isAtTop && !isAtBottom ? (
+        <div className="scroll-jumps">
+          <button
+            type="button"
+            className="scroll-jump"
+            onClick={scrollToTop}
+            aria-label="Go to top"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <polyline
+                points="6 14 12 8 18 14"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="scroll-jump"
+            onClick={scrollToBottom}
+            aria-label="Go to bottom"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <polyline
+                points="6 10 12 16 18 10"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+            </svg>
+          </button>
+        </div>
+      ) : null}
 
       <footer className="composer">
         {pendingFiles.length > 0 ? (
