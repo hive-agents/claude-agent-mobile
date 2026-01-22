@@ -38,8 +38,8 @@ export type DirectoryListing = {
 
 const CLAUDE_HOME = process.env.CLAUDE_HOME ?? path.join(os.homedir(), '.claude')
 const PROJECTS_DIR = path.join(CLAUDE_HOME, 'projects')
-const ROOT_DIR = path.resolve(process.env.CC_MOBILE_ROOT ?? os.homedir())
-const SHOW_HIDDEN = process.env.CC_MOBILE_SHOW_HIDDEN === '1'
+const ROOT_DIR = path.resolve(process.env.CAM_MOBILE_ROOT ?? os.homedir())
+const SHOW_HIDDEN = process.env.CAM_MOBILE_SHOW_HIDDEN === '1'
 
 type CachedConversation = ConversationSummary & {
   filePath: string

@@ -23,8 +23,8 @@ type ClientMessage =
   | { type: 'list_dirs'; path?: string | null }
   | { type: 'send_prompt'; text: string; attachments?: Attachment[] }
 
-const PORT = Number(process.env.CC_MOBILE_PORT ?? process.env.PORT ?? 8787)
-const WS_PATH = process.env.CC_MOBILE_WS_PATH ?? '/cam-ws'
+const PORT = Number(process.env.CAM_MOBILE_PORT ?? process.env.PORT ?? 8787)
+const WS_PATH = process.env.CAM_MOBILE_WS_PATH ?? '/cam-ws'
 const DEFAULT_MODEL =
   process.env.CLAUDE_MODEL ?? process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-5-20250929'
 
