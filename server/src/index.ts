@@ -24,10 +24,11 @@ type ClientMessage =
   | { type: 'send_prompt'; text: string; attachments?: Attachment[] }
 
 const PORT = Number(process.env.CC_MOBILE_PORT ?? process.env.PORT ?? 8787)
+const WS_PATH = process.env.CC_MOBILE_WS_PATH ?? '/cam-ws'
 const DEFAULT_MODEL =
   process.env.CLAUDE_MODEL ?? process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-5-20250929'
 
-const wss = new WebSocketServer({ port: PORT })
+const wss = new WebSocketServer({ port: PORT, path: WS_PATH })
 
 function normalizeBlocks(content: unknown): UIBlock[] {
   if (!content) return []
@@ -224,4 +225,4 @@ wss.on('connection', (socket: WebSocket) => {
 
 })
 
-console.log(`claude-agent-mobile server listening on ws://localhost:${PORT}`)
+console.log(`claude-agent-mobile server listening on ws://localhost:${PORT}${WS_PATH}`)

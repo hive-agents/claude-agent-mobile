@@ -94,7 +94,7 @@ type ServerPayload =
 const WS_URL = (() => {
   if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL as string
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${protocol}://${window.location.hostname}:8787`
+  return `${protocol}://${window.location.hostname}:8787/cam-ws`
 })()
 
 marked.setOptions({
