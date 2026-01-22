@@ -210,7 +210,11 @@ function getProjectForSession(history: HistoryEntry[], sessionId: string) {
 
 export async function readHistory() {
   const entries = (await readJsonLines(HISTORY_PATH)) as HistoryEntry[]
-  return entries
+  return entries.map((entry) => ({
+    ...entry,
+    project: typeof entry.project === 'string' ? entry.project.trim() : entry.project,
+    sessionId: typeof entry.sessionId === 'string' ? entry.sessionId.trim() : entry.sessionId
+  }))
 }
 
 export async function listConversations() {

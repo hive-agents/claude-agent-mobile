@@ -1,3 +1,5 @@
+import DOMPurify from 'dompurify'
+import { marked } from 'marked'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 type Block = {
@@ -23,6 +25,45 @@ type ConversationSummary = {
   project: string
   firstPrompt: string
   updatedAt: number
+}
+
+type ToolEntry = {
+  id: string
+  name: string
+  input?: string
+  result?: string
+}
+
+type FlatItem =
+  | {
+      kind: 'message'
+      id: string
+      role: ChatMessage['role']
+      blocks: Block[]
+      meta?: ChatMessage['meta']
+    }
+  | {
+      kind: 'tool'
+      tool: ToolEntry
+    }
+
+type DisplayItem =
+  | {
+      kind: 'message'
+      id: string
+      role: ChatMessage['role']
+      blocks: Block[]
+      meta?: ChatMessage['meta']
+    }
+  | {
+      kind: 'toolStack'
+      id: string
+      tools: ToolEntry[]
+    }
+
+type Breadcrumb = {
+  label: string
+  path: string
 }
 
 type ServerPayload =
@@ -56,6 +97,13 @@ const WS_URL = (() => {
   return `${protocol}://${window.location.hostname}:8787`
 })()
 
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+  headerIds: false,
+  mangle: false
+})
+
 function formatProject(project: string) {
   const parts = project.split('/').filter(Boolean)
   if (parts.length <= 2) return project
@@ -66,6 +114,11 @@ function truncateWords(text: string, maxWords = 10) {
   const words = text.trim().split(/\s+/)
   if (words.length <= maxWords) return text
   return `${words.slice(0, maxWords).join(' ')}...`
+}
+
+function renderMarkdown(text: string) {
+  const html = marked.parse(text || '', { async: false }) as string
+  return { __html: DOMPurify.sanitize(html) }
 }
 
 export default function App() {
@@ -80,6 +133,10 @@ export default function App() {
   const [dirEntries, setDirEntries] = useState<string[]>([])
   const [dirLoading, setDirLoading] = useState(false)
   const [dirError, setDirError] = useState<string | null>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({})
+  const [expandedStacks, setExpandedStacks] = useState<Record<string, boolean>>({})
   const [isProcessing, setIsProcessing] = useState(false)
   const [inputText, setInputText] = useState('')
   const [pendingFiles, setPendingFiles] = useState<{ name: string; content: string }[]>([])
@@ -88,6 +145,7 @@ export default function App() {
   const wsRef = useRef<WebSocket | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     const ws = new WebSocket(WS_URL)
@@ -167,20 +225,45 @@ export default function App() {
     node.scrollTop = node.scrollHeight
   }, [messages, isProcessing])
 
+  useEffect(() => {
+    if (searchOpen) {
+      searchInputRef.current?.focus()
+    }
+  }, [searchOpen])
+
   const canSend = useMemo(() => {
     return inputText.trim().length > 0 || pendingFiles.length > 0
   }, [inputText, pendingFiles])
 
   const uniqueConversations = useMemo(() => {
+    const sorted = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt)
     const map = new Map<string, ConversationSummary>()
-    for (const conversation of conversations) {
-      const existing = map.get(conversation.sessionId)
-      if (!existing || conversation.updatedAt >= existing.updatedAt) {
+    for (const conversation of sorted) {
+      if (!map.has(conversation.sessionId)) {
         map.set(conversation.sessionId, conversation)
       }
     }
-    return Array.from(map.values()).sort((a, b) => b.updatedAt - a.updatedAt)
+    return Array.from(map.values())
   }, [conversations])
+
+  const filteredDirEntries = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase()
+    if (!query) return dirEntries
+    return dirEntries.filter((entry) => entry.toLowerCase().includes(query))
+  }, [dirEntries, searchQuery])
+
+  const breadcrumbs = useMemo(() => {
+    if (!dirPath) return [] as Breadcrumb[]
+    const normalized = dirPath.replace(/\/+/g, '/')
+    const parts = normalized.split('/').filter(Boolean)
+    const items: Breadcrumb[] = []
+    let current = normalized.startsWith('/') ? '' : ''
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : normalized.startsWith('/') ? `/${part}` : part
+      items.push({ label: part, path: current })
+    }
+    return items
+  }, [dirPath])
 
   const requestDirList = (path: string | null) => {
     setDirLoading(true)
@@ -235,11 +318,15 @@ export default function App() {
   const handleNewConversation = () => {
     setDrawerOpen(false)
     setProjectPickerOpen(true)
+    setSearchOpen(false)
+    setSearchQuery('')
     requestDirList(null)
   }
 
   const handleClosePicker = () => {
     setProjectPickerOpen(false)
+    setSearchOpen(false)
+    setSearchQuery('')
   }
 
   const handleNavigateDir = (entry: string) => {
@@ -254,61 +341,148 @@ export default function App() {
     setActiveSessionId(null)
     setCurrentProject(dirPath)
     setProjectPickerOpen(false)
+    setSearchOpen(false)
+    setSearchQuery('')
   }
 
-  const renderBlocks = (message: ChatMessage) => {
-    const hasReasoning = message.blocks.some((block) => block.type === 'reasoning')
+  const handleToggleSearch = () => {
+    setSearchOpen((prev) => !prev)
+  }
+
+  const handleClearSearch = () => {
+    setSearchQuery('')
+  }
+
+  const toggleTool = (id: string) => {
+    setExpandedTools((prev) => ({ ...prev, [id]: !prev[id] }))
+  }
+
+  const toggleStack = (id: string) => {
+    setExpandedStacks((prev) => ({ ...prev, [id]: !prev[id] }))
+  }
+
+  const displayItems = useMemo(() => {
+    const flatItems: FlatItem[] = []
+    const pendingTools: ToolEntry[] = []
+    let toolIndex = 0
+    let messageIndex = 0
+
+    for (const message of messages) {
+      let segmentBlocks: Block[] = []
+      let segmentIndex = 0
+
+      const flushSegment = () => {
+        if (segmentBlocks.length === 0) return
+        flatItems.push({
+          kind: 'message',
+          id: `${message.id}-${messageIndex}-${segmentIndex}`,
+          role: message.role,
+          blocks: segmentBlocks,
+          meta: message.meta
+        })
+        messageIndex += 1
+        segmentIndex += 1
+        segmentBlocks = []
+      }
+
+      message.blocks.forEach((block, blockIndex) => {
+        if (block.type === 'tool_use') {
+          flushSegment()
+          const tool: ToolEntry = {
+            id: `${message.id}-tool-${blockIndex}-${toolIndex}`,
+            name: block.name ?? 'unknown',
+            input: block.input
+          }
+          toolIndex += 1
+          pendingTools.push(tool)
+          flatItems.push({ kind: 'tool', tool })
+          return
+        }
+        if (block.type === 'tool_result') {
+          flushSegment()
+          const target = pendingTools.shift()
+          if (target) {
+            target.result = block.text ?? ''
+          } else {
+            const tool: ToolEntry = {
+              id: `${message.id}-tool-${blockIndex}-${toolIndex}`,
+              name: 'unknown',
+              result: block.text ?? ''
+            }
+            toolIndex += 1
+            flatItems.push({ kind: 'tool', tool })
+          }
+          return
+        }
+        segmentBlocks.push(block)
+      })
+
+      flushSegment()
+    }
+
+    const stackedItems: DisplayItem[] = []
+    let stack: ToolEntry[] = []
+    let stackIndex = 0
+
+    for (const item of flatItems) {
+      if (item.kind === 'tool') {
+        stack.push(item.tool)
+        continue
+      }
+      if (stack.length > 0) {
+        stackedItems.push({ kind: 'toolStack', id: `stack-${stackIndex}`, tools: stack })
+        stackIndex += 1
+        stack = []
+      }
+      stackedItems.push(item)
+    }
+
+    if (stack.length > 0) {
+      stackedItems.push({ kind: 'toolStack', id: `stack-${stackIndex}`, tools: stack })
+    }
+
+    return stackedItems
+  }, [messages])
+
+  const renderMessageBlocks = (item: DisplayItem) => {
+    if (item.kind !== 'message') return null
     return (
       <>
-        {message.blocks.map((block, index) => {
+        {item.blocks.map((block, index) => {
           if (block.type === 'text') {
             return (
-              <div key={`${message.id}-text-${index}`} className="block-text">
-                {block.text}
-              </div>
+              <div
+                key={`${item.id}-text-${index}`}
+                className="markdown"
+                dangerouslySetInnerHTML={renderMarkdown(block.text ?? '')}
+              />
             )
           }
           if (block.type === 'attachment') {
             return (
-              <div key={`${message.id}-attachment-${index}`} className="block tool-use">
+              <div key={`${item.id}-attachment-${index}`} className="block tool-use">
                 <div className="block-label">Attachment: {block.name}</div>
-                <pre>{block.text}</pre>
-              </div>
-            )
-          }
-          if (block.type === 'tool_use') {
-            return (
-              <div key={`${message.id}-tool-${index}`} className="block tool-use">
-                <div className="block-label">Tool use: {block.name}</div>
-                <pre>{block.input}</pre>
-              </div>
-            )
-          }
-          if (block.type === 'tool_result') {
-            return (
-              <div key={`${message.id}-tool-result-${index}`} className="block tool-result">
-                <div className="block-label">Tool result</div>
                 <pre>{block.text}</pre>
               </div>
             )
           }
           if (block.type === 'reasoning') {
             return (
-              <div key={`${message.id}-reasoning-${index}`} className="block reasoning">
-                {block.text}
+              <div key={`${item.id}-reasoning-${index}`} className="block reasoning">
+                <div
+                  className="markdown"
+                  dangerouslySetInnerHTML={renderMarkdown(block.text ?? '')}
+                />
               </div>
             )
           }
           return (
-            <div key={`${message.id}-other-${index}`} className="block">
+            <div key={`${item.id}-other-${index}`} className="block">
               <div className="block-label">Other</div>
               <pre>{block.text}</pre>
             </div>
           )
         })}
-        {message.role === 'assistant' && !hasReasoning && message.meta?.reasoningStatus ? (
-          <div className="block reasoning empty">Reasoning unavailable</div>
-        ) : null}
       </>
     )
   }
@@ -322,6 +496,7 @@ export default function App() {
         onClick={() => {
           setDrawerOpen(false)
           setProjectPickerOpen(false)
+          setSearchOpen(false)
         }}
       />
       <aside className={drawerOpen ? 'drawer open' : 'drawer'}>
@@ -351,12 +526,80 @@ export default function App() {
         <div className="project-picker-header">
           <div>
             <div className="project-title">New conversation</div>
-            <div className="project-path">{dirPath ?? 'Loading...'}</div>
+            <div className="project-breadcrumbs">
+              {dirPath ? (
+                <>
+                  <button
+                    type="button"
+                    className="crumb-button"
+                    onClick={() => requestDirList('/')}
+                  >
+                    /
+                  </button>
+                  {breadcrumbs.map((crumb) => (
+                    <span key={crumb.path} className="crumb">
+                      <span className="crumb-sep">/</span>
+                      <button
+                        type="button"
+                        className="crumb-button"
+                        onClick={() => requestDirList(crumb.path)}
+                      >
+                        {crumb.label}
+                      </button>
+                    </span>
+                  ))}
+                </>
+              ) : (
+                <span className="project-path">Loading...</span>
+              )}
+            </div>
           </div>
-          <button type="button" className="icon-button" onClick={handleClosePicker} aria-label="Close">
-            x
-          </button>
+          <div className="project-header-actions">
+            <button
+              type="button"
+              className="icon-button"
+              onClick={handleToggleSearch}
+              aria-label="Search folders"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" strokeWidth="2" />
+                <line x1="16" y1="16" x2="21" y2="21" stroke="currentColor" strokeWidth="2" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={handleClosePicker}
+              aria-label="Close"
+            >
+              x
+            </button>
+          </div>
         </div>
+        {searchOpen ? (
+          <div className="project-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" strokeWidth="2" />
+              <line x1="16" y1="16" x2="21" y2="21" stroke="currentColor" strokeWidth="2" />
+            </svg>
+            <input
+              ref={searchInputRef}
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search folders"
+            />
+            {searchQuery ? (
+              <button
+                type="button"
+                className="icon-button"
+                onClick={handleClearSearch}
+                aria-label="Clear search"
+              >
+                x
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <div className="project-actions">
           <button
             type="button"
@@ -366,22 +609,14 @@ export default function App() {
           >
             Use this folder
           </button>
-          <button
-            type="button"
-            className="project-action"
-            onClick={() => requestDirList(dirParent)}
-            disabled={!dirParent || dirLoading}
-          >
-            Up
-          </button>
         </div>
         <div className="project-list">
           {dirLoading ? <div className="project-empty">Loading...</div> : null}
           {dirError ? <div className="project-empty">{dirError}</div> : null}
-          {!dirLoading && !dirError && dirEntries.length === 0 ? (
+          {!dirLoading && !dirError && filteredDirEntries.length === 0 ? (
             <div className="project-empty">No folders found.</div>
           ) : null}
-          {dirEntries.map((entry) => (
+          {filteredDirEntries.map((entry) => (
             <button
               key={entry}
               type="button"
@@ -395,7 +630,11 @@ export default function App() {
       </section>
 
       <header className="app-header">
-        <button type="button" className="icon-button" onClick={() => setDrawerOpen(true)}>
+        <button
+          type="button"
+          className="icon-button hamburger-button"
+          onClick={() => setDrawerOpen(true)}
+        >
           <span className="hamburger">
             <span />
           </span>
@@ -414,22 +653,75 @@ export default function App() {
         {wsStatus !== 'open' ? (
           <div className="status-pill">Server {wsStatus}</div>
         ) : null}
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={
-              message.meta?.isMeta
-                ? 'message meta'
-                : message.role === 'user'
-                  ? 'message user'
-                  : message.role === 'tool'
-                    ? 'message tool'
-                    : 'message'
-            }
-          >
-            {renderBlocks(message)}
-          </div>
-        ))}
+        {displayItems.map((item) => {
+          if (item.kind === 'message') {
+            return (
+              <div
+                key={item.id}
+                className={
+                  item.meta?.isMeta
+                    ? 'message meta'
+                    : item.role === 'user'
+                      ? 'message user'
+                      : item.role === 'tool'
+                        ? 'message tool'
+                        : 'message'
+                }
+              >
+                {renderMessageBlocks(item)}
+              </div>
+            )
+          }
+
+          const isStackExpanded = item.tools.length === 1 || !!expandedStacks[item.id]
+          const stackCollapsed = item.tools.length > 1 && !isStackExpanded
+          const toolsToShow = isStackExpanded ? item.tools : [item.tools[0]]
+
+          return (
+            <div key={item.id} className={stackCollapsed ? 'tool-stack stacked' : 'tool-stack'}>
+              <div className="tool-stack-header">
+                <div className="tool-stack-title">Tool uses</div>
+                {item.tools.length > 1 ? (
+                  <button
+                    type="button"
+                    className="stack-toggle"
+                    onClick={() => toggleStack(item.id)}
+                  >
+                    {isStackExpanded ? 'Collapse stack' : `Stack x${item.tools.length}`}
+                  </button>
+                ) : null}
+              </div>
+              <div className="tool-stack-list">
+                {toolsToShow.map((tool) => {
+                  const isOpen = !!expandedTools[tool.id]
+                  return (
+                    <div key={tool.id} className={isOpen ? 'tool-card open' : 'tool-card'}>
+                      <button type="button" className="tool-line" onClick={() => toggleTool(tool.id)}>
+                        <span className="tool-line-title">Tool use: {tool.name}</span>
+                      </button>
+                      {isOpen ? (
+                        <div className="tool-details">
+                          {tool.input ? (
+                            <div className="tool-detail">
+                              <div className="tool-detail-label">Input</div>
+                              <pre>{tool.input}</pre>
+                            </div>
+                          ) : null}
+                          {tool.result ? (
+                            <div className="tool-detail">
+                              <div className="tool-detail-label">Result</div>
+                              <pre>{tool.result}</pre>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
         {isProcessing ? (
           <div className="message">
             <div className="processing" aria-label="Processing">
