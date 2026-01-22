@@ -26,6 +26,10 @@ node server/dist/index.js
 
 Serve `dist/` with nginx or similar. Set `VITE_WS_URL` at build time to point to your production WebSocket URL.
 
+If you run the backend behind a reverse proxy, ensure the proxy forwards:
+- WebSocket path (default `/cam-ws`)
+- Auth endpoints (`/cam-auth/status`, `/cam-login`, `/cam-logout`) or custom paths if you override them.
+
 ## Environment
 
 - `ANTHROPIC_API_KEY`: optional if you have Claude OAuth already configured; otherwise required to send prompts.
@@ -36,3 +40,63 @@ Serve `dist/` with nginx or similar. Set `VITE_WS_URL` at build time to point to
 - `CAM_MOBILE_ROOT`: optional root directory for the project picker (defaults to your home directory).
 - `CAM_MOBILE_SHOW_HIDDEN`: set to `1` to show hidden folders in the picker.
 - `VITE_WS_URL`: optional override for the frontend WebSocket URL.
+- `VITE_HTTP_URL`: optional override for the frontend HTTP base URL used for auth endpoints.
+
+## Auth (builtin + external)
+
+Auth is enforced on the WebSocket upgrade using a session cookie. There are three modes:
+
+- `CAM_AUTH_MODE=off`: allow all connections (local dev).
+- `CAM_AUTH_MODE=builtin`: show the password modal; `/cam-login` issues a session cookie.
+- `CAM_AUTH_MODE=external`: accept a host-provided cookie; optionally verify with a shared secret.
+
+Builtin mode expects a bcrypt hash, and the client sends a bcrypt-hashed password over TLS.
+
+Required env for builtin:
+- `CAM_AUTH_PASSWORD_BCRYPT`: bcrypt hash of the password.
+- `CAM_AUTH_SIGNING_SECRET`: HMAC secret used to sign the session cookie.
+
+Note: wrap bcrypt hashes in quotes when exporting in a shell, because they contain `$`.
+
+Optional env:
+- `CAM_AUTH_COOKIE_NAME`: cookie name (default `cam_session`).
+- `CAM_AUTH_COOKIE_TTL_SECONDS`: session TTL seconds (default 30 days).
+- `CAM_AUTH_COOKIE_SECURE`: set `true` when using HTTPS.
+- `CAM_AUTH_LOGIN_PATH`: login endpoint (default `/cam-login`).
+- `CAM_AUTH_LOGOUT_PATH`: logout endpoint (default `/cam-logout`).
+- `CAM_AUTH_STATUS_PATH`: status endpoint (default `/cam-auth/status`).
+- `CAM_AUTH_EXTERNAL_SIGNING_SECRET`: if set, external mode verifies the cookie signature.
+- `CAM_AUTH_CORS_ORIGIN`: comma-separated list or `*` to allow cross-origin auth requests.
+
+Generate a bcrypt hash:
+
+```bash
+node -e "const bcrypt=require('bcryptjs'); console.log(bcrypt.hashSync('your-password', 10))"
+```
+
+If login fails on a hosted setup, double-check that your reverse proxy exposes `/cam-login` and `/cam-auth/status` in addition to the WebSocket path.
+
+### Example configurations
+
+1) Localhost (no auth)
+
+```bash
+CAM_AUTH_MODE=off
+```
+
+2) VPS self-hosted (builtin cookie auth)
+
+```bash
+CAM_AUTH_MODE=builtin
+CAM_AUTH_PASSWORD_BCRYPT="$2a$10$...your bcrypt hash..."
+CAM_AUTH_SIGNING_SECRET="replace-with-random-secret"
+CAM_AUTH_COOKIE_SECURE=true
+```
+
+3) Hosted (external auth cookie from hosting service)
+
+```bash
+CAM_AUTH_MODE=external
+CAM_AUTH_COOKIE_NAME="cam_session"
+CAM_AUTH_EXTERNAL_SIGNING_SECRET="shared-secret-from-host" # optional
+```

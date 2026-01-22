@@ -1,5 +1,6 @@
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
+import { hash as bcryptHash } from 'bcryptjs'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 type Block = {
@@ -91,10 +92,31 @@ type ServerPayload =
   | { type: 'conversations'; conversations: ConversationSummary[] }
   | { type: 'error'; error: string }
 
+type AuthStatus = {
+  mode: 'off' | 'builtin' | 'external' | string
+  authorized: boolean
+  loginPath?: string
+  logoutPath?: string
+  salt?: string | null
+}
+
 const WS_URL = (() => {
   if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL as string
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
   return `${protocol}://${window.location.hostname}:8787/cam-ws`
+})()
+
+const HTTP_BASE = (() => {
+  if (import.meta.env.VITE_HTTP_URL) {
+    const httpUrl = new URL(import.meta.env.VITE_HTTP_URL as string)
+    return httpUrl.origin
+  }
+  if (import.meta.env.VITE_WS_URL) {
+    const wsUrl = new URL(import.meta.env.VITE_WS_URL as string)
+    wsUrl.protocol = wsUrl.protocol === 'wss:' ? 'https:' : 'http:'
+    return wsUrl.origin
+  }
+  return `${window.location.protocol}//${window.location.hostname}:8787`
 })()
 
 marked.setOptions({
@@ -133,6 +155,15 @@ export default function App() {
   const [dirEntries, setDirEntries] = useState<string[]>([])
   const [dirLoading, setDirLoading] = useState(false)
   const [dirError, setDirError] = useState<string | null>(null)
+  const [authMode, setAuthMode] = useState<'off' | 'builtin' | 'external' | 'unknown'>('unknown')
+  const [authAuthorized, setAuthAuthorized] = useState(true)
+  const [authSalt, setAuthSalt] = useState<string | null>(null)
+  const [authLoginPath, setAuthLoginPath] = useState('/cam-login')
+  const [authStatusError, setAuthStatusError] = useState<string | null>(null)
+  const [authStatusLoading, setAuthStatusLoading] = useState(true)
+  const [loginPassword, setLoginPassword] = useState('')
+  const [loginError, setLoginError] = useState<string | null>(null)
+  const [loginPending, setLoginPending] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [conversationSearchOpen, setConversationSearchOpen] = useState(false)
@@ -152,7 +183,37 @@ export default function App() {
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const conversationSearchInputRef = useRef<HTMLInputElement | null>(null)
 
-  useEffect(() => {
+  const refreshAuthStatus = useCallback(async () => {
+    setAuthStatusLoading(true)
+    setAuthStatusError(null)
+    try {
+      const response = await fetch(`${HTTP_BASE}/cam-auth/status`, {
+        method: 'GET',
+        credentials: 'include'
+      })
+      if (!response.ok) {
+        throw new Error('Auth status unavailable.')
+      }
+      const payload = (await response.json()) as AuthStatus
+      setAuthMode(payload.mode === 'builtin' || payload.mode === 'external' || payload.mode === 'off' ? payload.mode : 'unknown')
+      setAuthAuthorized(Boolean(payload.authorized))
+      setAuthSalt(payload.salt ?? null)
+      setAuthLoginPath(payload.loginPath ?? '/cam-login')
+    } catch (error) {
+      setAuthMode('unknown')
+      setAuthAuthorized(true)
+      setAuthSalt(null)
+      setAuthStatusError('Auth status could not be loaded.')
+    } finally {
+      setAuthStatusLoading(false)
+    }
+  }, [])
+
+  const connectWebSocket = useCallback(() => {
+    if (wsRef.current) {
+      wsRef.current.close()
+    }
+    setWsStatus('connecting')
     const ws = new WebSocket(WS_URL)
     wsRef.current = ws
 
@@ -218,11 +279,20 @@ export default function App() {
         ])
       }
     }
-
-    return () => {
-      ws.close()
-    }
   }, [])
+
+  useEffect(() => {
+    refreshAuthStatus()
+  }, [refreshAuthStatus])
+
+  useEffect(() => {
+    if (authStatusLoading) return
+    if (authMode === 'builtin' && !authAuthorized) return
+    connectWebSocket()
+    return () => {
+      wsRef.current?.close()
+    }
+  }, [authStatusLoading, authMode, authAuthorized, connectWebSocket])
 
   const updateScrollState = useCallback(() => {
     const node = scrollRef.current
@@ -418,6 +488,52 @@ export default function App() {
     setConversationSearchQuery('')
   }
 
+  const handleLoginSubmit: React.FormEventHandler<HTMLFormElement> = async (event) => {
+    event.preventDefault()
+    if (!authSalt) {
+      setLoginError('Login is not ready yet.')
+      return
+    }
+    if (!loginPassword.trim()) {
+      setLoginError('Enter your password.')
+      return
+    }
+    setLoginPending(true)
+    setLoginError(null)
+    try {
+      const hash = await bcryptHash(loginPassword, authSalt)
+      const response = await fetch(`${HTTP_BASE}${authLoginPath}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hash })
+      })
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Password not accepted.')
+        }
+        if (response.status === 404) {
+          throw new Error(`Login endpoint not found. Check proxy for ${authLoginPath}.`)
+        }
+        if (response.status === 500) {
+          throw new Error(
+            'Server auth is not configured. Set CAM_AUTH_PASSWORD_BCRYPT and CAM_AUTH_SIGNING_SECRET.'
+          )
+        }
+        const detail = await response.text()
+        throw new Error(`Login failed (${response.status}). ${detail || ''}`.trim())
+      }
+      setLoginPassword('')
+      await refreshAuthStatus()
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Login failed.'
+      setLoginError(message)
+    } finally {
+      setLoginPending(false)
+    }
+  }
+
   const scrollToTop = () => {
     const node = scrollRef.current
     if (!node) return
@@ -564,10 +680,59 @@ export default function App() {
     )
   }
 
+  const loginRequired = authMode === 'builtin' && !authAuthorized
   const overlayOpen = drawerOpen || projectPickerOpen
 
   return (
     <div className="app">
+      {loginRequired ? (
+        <div className="auth-overlay">
+          <div className="auth-modal">
+            <div className="auth-title">Unlock console</div>
+            <div className="auth-subtitle">This session is protected.</div>
+            <form className="auth-form" onSubmit={handleLoginSubmit}>
+              <label className="auth-label" htmlFor="auth-password">
+                Password
+              </label>
+              <input
+                id="auth-password"
+                type="password"
+                className="auth-input"
+                value={loginPassword}
+                onChange={(event) => {
+                  setLoginPassword(event.target.value)
+                  if (loginError) setLoginError(null)
+                }}
+                placeholder="Access password"
+                autoComplete="current-password"
+                autoFocus
+                disabled={loginPending}
+              />
+              {loginError ? <div className="auth-error">{loginError}</div> : null}
+              {authSalt ? null : (
+                <div className="auth-error">
+                  Auth is not configured. Set `CAM_AUTH_MODE=builtin`,
+                  `CAM_AUTH_PASSWORD_BCRYPT`, and `CAM_AUTH_SIGNING_SECRET` on the server.
+                  See the{' '}
+                  <a
+                    className="auth-link"
+                    href="https://github.com/hive-agents/claude-agent-mobile"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    README
+                  </a>
+                  .
+                </div>
+              )}
+              {authStatusError ? <div className="auth-note">{authStatusError}</div> : null}
+              <button type="submit" className="auth-button" disabled={loginPending || !authSalt}>
+                {loginPending ? 'Checking...' : 'Unlock'}
+              </button>
+            </form>
+          </div>
+        </div>
+      ) : null}
       <div
         className={overlayOpen ? 'scrim open' : 'scrim'}
         onClick={() => {

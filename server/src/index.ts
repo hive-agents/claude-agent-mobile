@@ -1,5 +1,6 @@
 import { WebSocketServer, type RawData, type WebSocket } from 'ws'
 import crypto from 'crypto'
+import http, { type IncomingMessage } from 'http'
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import {
   getBootstrapState,
@@ -28,7 +29,230 @@ const WS_PATH = process.env.CAM_MOBILE_WS_PATH ?? '/cam-ws'
 const DEFAULT_MODEL =
   process.env.CLAUDE_MODEL ?? process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-5-20250929'
 
-const wss = new WebSocketServer({ port: PORT, path: WS_PATH })
+const AUTH_MODE = (process.env.CAM_AUTH_MODE ?? 'builtin').toLowerCase()
+const AUTH_COOKIE_NAME = process.env.CAM_AUTH_COOKIE_NAME ?? 'cam_session'
+const AUTH_LOGIN_PATH = process.env.CAM_AUTH_LOGIN_PATH ?? '/cam-login'
+const AUTH_LOGOUT_PATH = process.env.CAM_AUTH_LOGOUT_PATH ?? '/cam-logout'
+const AUTH_STATUS_PATH = process.env.CAM_AUTH_STATUS_PATH ?? '/cam-auth/status'
+const AUTH_PASSWORD_HASH = (process.env.CAM_AUTH_PASSWORD_BCRYPT ?? '').trim()
+const AUTH_SIGNING_SECRET = (process.env.CAM_AUTH_SIGNING_SECRET ?? '').trim()
+const AUTH_EXTERNAL_SIGNING_SECRET = process.env.CAM_AUTH_EXTERNAL_SIGNING_SECRET ?? ''
+const AUTH_COOKIE_TTL_SECONDS = Number(process.env.CAM_AUTH_COOKIE_TTL_SECONDS ?? 60 * 60 * 24 * 30)
+const AUTH_COOKIE_SECURE = (process.env.CAM_AUTH_COOKIE_SECURE ?? 'false').toLowerCase() === 'true'
+const AUTH_CORS_ORIGIN = process.env.CAM_AUTH_CORS_ORIGIN ?? ''
+
+const wss = new WebSocketServer({ noServer: true })
+
+function base64UrlEncode(value: string | Buffer) {
+  const buffer = typeof value === 'string' ? Buffer.from(value, 'utf8') : value
+  return buffer
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '')
+}
+
+function base64UrlDecode(value: string) {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(value.length + ((4 - (value.length % 4)) % 4), '=')
+  return Buffer.from(padded, 'base64').toString('utf8')
+}
+
+function parseCookies(header: string | undefined) {
+  if (!header) return {} as Record<string, string>
+  return header.split(';').reduce<Record<string, string>>((acc, part) => {
+    const [rawKey, ...rest] = part.trim().split('=')
+    if (!rawKey) return acc
+    acc[rawKey] = decodeURIComponent(rest.join('='))
+    return acc
+  }, {})
+}
+
+function signToken(payloadBase64: string, secret: string) {
+  const signature = crypto.createHmac('sha256', secret).update(payloadBase64).digest()
+  return `${payloadBase64}.${base64UrlEncode(signature)}`
+}
+
+function createSessionToken() {
+  const now = Math.floor(Date.now() / 1000)
+  const payload = {
+    iat: now,
+    exp: now + AUTH_COOKIE_TTL_SECONDS
+  }
+  const payloadBase64 = base64UrlEncode(JSON.stringify(payload))
+  return signToken(payloadBase64, AUTH_SIGNING_SECRET)
+}
+
+function verifySignedToken(token: string, secret: string) {
+  const [payloadBase64, signature] = token.split('.')
+  if (!payloadBase64 || !signature) return false
+  const expected = signToken(payloadBase64, secret).split('.')[1]
+  const signatureBuf = Buffer.from(signature)
+  const expectedBuf = Buffer.from(expected)
+  if (signatureBuf.length !== expectedBuf.length) return false
+  if (!crypto.timingSafeEqual(signatureBuf, expectedBuf)) return false
+  try {
+    const payload = JSON.parse(base64UrlDecode(payloadBase64)) as { exp?: number }
+    if (payload.exp && Date.now() / 1000 > payload.exp) return false
+    return true
+  } catch {
+    return false
+  }
+}
+
+function isAuthorized(req: IncomingMessage) {
+  if (AUTH_MODE === 'off') return true
+  const cookies = parseCookies(req.headers.cookie)
+  const token = cookies[AUTH_COOKIE_NAME]
+  if (!token) return false
+  if (AUTH_MODE === 'external') {
+    if (AUTH_EXTERNAL_SIGNING_SECRET) {
+      return verifySignedToken(token, AUTH_EXTERNAL_SIGNING_SECRET)
+    }
+    return true
+  }
+  if (AUTH_MODE === 'builtin') {
+    if (!AUTH_SIGNING_SECRET) return false
+    return verifySignedToken(token, AUTH_SIGNING_SECRET)
+  }
+  return false
+}
+
+function setCorsHeaders(req: http.IncomingMessage, res: http.ServerResponse) {
+  if (!AUTH_CORS_ORIGIN) return
+  const origin = req.headers.origin
+  if (!origin) return
+  if (AUTH_CORS_ORIGIN === '*' || AUTH_CORS_ORIGIN.split(',').map((item) => item.trim()).includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Access-Control-Allow-Credentials', 'true')
+    res.setHeader('Vary', 'Origin')
+  }
+}
+
+function setAuthCookie(res: http.ServerResponse, token: string | null) {
+  const parts = [
+    `${AUTH_COOKIE_NAME}=${token ? encodeURIComponent(token) : ''}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    token ? `Max-Age=${AUTH_COOKIE_TTL_SECONDS}` : 'Max-Age=0'
+  ]
+  if (AUTH_COOKIE_SECURE) parts.push('Secure')
+  res.setHeader('Set-Cookie', parts.join('; '))
+}
+
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
+  if (req.method === 'OPTIONS') {
+    setCorsHeaders(req, res)
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+    res.writeHead(204)
+    res.end()
+    return
+  }
+
+  if (url.pathname === AUTH_LOGIN_PATH && req.method === 'POST') {
+    if (AUTH_MODE !== 'builtin') {
+      res.writeHead(404)
+      res.end('Not found')
+      return
+    }
+    if (!AUTH_PASSWORD_HASH || !AUTH_SIGNING_SECRET) {
+      setCorsHeaders(req, res)
+      res.writeHead(500)
+      res.end('Server auth is not configured.')
+      return
+    }
+    let body = ''
+    req.on('data', (chunk) => {
+      body += chunk
+      if (body.length > 10_000) req.destroy()
+    })
+    req.on('end', () => {
+      let hash = ''
+      try {
+        const parsed = JSON.parse(body || '{}') as { hash?: string }
+        hash = parsed.hash ?? ''
+      } catch {
+        setCorsHeaders(req, res)
+        res.writeHead(400)
+        res.end('Malformed request.')
+        return
+      }
+      if (!hash) {
+        setCorsHeaders(req, res)
+        res.writeHead(400)
+        res.end('Missing hash.')
+        return
+      }
+      const normalizedHash = hash.trim()
+      const hashBuf = Buffer.from(normalizedHash)
+      const expectedBuf = Buffer.from(AUTH_PASSWORD_HASH)
+      if (hashBuf.length !== expectedBuf.length) {
+        setCorsHeaders(req, res)
+        res.writeHead(401)
+        res.end('Unauthorized')
+        return
+      }
+      if (!crypto.timingSafeEqual(hashBuf, expectedBuf)) {
+        setCorsHeaders(req, res)
+        res.writeHead(401)
+        res.end('Unauthorized')
+        return
+      }
+      const token = createSessionToken()
+      setAuthCookie(res, token)
+      setCorsHeaders(req, res)
+      res.writeHead(200)
+      res.end('ok')
+    })
+    return
+  }
+
+  if (url.pathname === AUTH_LOGOUT_PATH && req.method === 'POST') {
+    setAuthCookie(res, null)
+    setCorsHeaders(req, res)
+    res.writeHead(200)
+    res.end('ok')
+    return
+  }
+
+  if (url.pathname === AUTH_STATUS_PATH && req.method === 'GET') {
+    const authorized = isAuthorized(req)
+    setCorsHeaders(req, res)
+    res.setHeader('Content-Type', 'application/json')
+    res.writeHead(200)
+    res.end(
+      JSON.stringify({
+        mode: AUTH_MODE,
+        authorized,
+        loginPath: AUTH_LOGIN_PATH,
+        logoutPath: AUTH_LOGOUT_PATH,
+        salt: AUTH_MODE === 'builtin' ? AUTH_PASSWORD_HASH : null
+      })
+    )
+    return
+  }
+
+  res.writeHead(404)
+  res.end('Not found')
+})
+
+server.on('upgrade', (req, socket, head) => {
+  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
+  if (url.pathname !== WS_PATH) {
+    socket.destroy()
+    return
+  }
+  if (!isAuthorized(req)) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
+    socket.destroy()
+    return
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit('connection', ws, req)
+  })
+})
 
 function normalizeBlocks(content: unknown): UIBlock[] {
   if (!content) return []
@@ -222,7 +446,9 @@ wss.on('connection', (socket: WebSocket) => {
   socket.on('close', () => {
     unsubscribeConversations()
   })
-
 })
 
-console.log(`claude-agent-mobile server listening on ws://localhost:${PORT}${WS_PATH}`)
+server.listen(PORT, () => {
+  console.log(`claude-agent-mobile server listening on ws://localhost:${PORT}${WS_PATH}`)
+  console.log(`auth mode: ${AUTH_MODE}`)
+})
