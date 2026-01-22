@@ -1,15 +1,12 @@
 import { WebSocketServer, type RawData, type WebSocket } from 'ws'
 import crypto from 'crypto'
-import {
-  unstable_v2_createSession,
-  unstable_v2_resumeSession,
-  type SDKMessage
-} from '@anthropic-ai/claude-agent-sdk'
+import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import {
   getBootstrapState,
   listConversations,
   loadConversation,
   listDirectories,
+  watchConversations,
   type UIBlock,
   type UIMessage
 } from './claudeStore.js'
@@ -17,12 +14,6 @@ import {
 type Attachment = {
   name: string
   content: string
-}
-
-type Session = {
-  send(message: string): Promise<void>
-  stream(): AsyncGenerator<SDKMessage>
-  close(): void
 }
 
 type ClientMessage =
@@ -120,7 +111,6 @@ function buildUserMessage(text: string, attachments: Attachment[]): UIMessage {
 }
 
 wss.on('connection', (socket: WebSocket) => {
-  let activeSession: Session | null = null
   let activeSessionId: string | null = null
   let activeProject: string | null = null
   let activeModel = DEFAULT_MODEL
@@ -130,18 +120,13 @@ wss.on('connection', (socket: WebSocket) => {
     socket.send(JSON.stringify(payload))
   }
 
-  const ensureSession = async () => {
-    if (activeSession) return activeSession
-    if (activeSessionId) {
-      try {
-        activeSession = unstable_v2_resumeSession(activeSessionId, { model: activeModel })
-        return activeSession
-      } catch {
-        activeSession = null
-      }
-    }
-    activeSession = unstable_v2_createSession({ model: activeModel })
-    return activeSession
+  const unsubscribeConversations = watchConversations((conversations) => {
+    send({ type: 'conversations', conversations })
+  })
+
+  const resolveQueryCwd = () => {
+    const candidate = activeProject?.trim()
+    return candidate && candidate.length > 0 ? candidate : process.cwd()
   }
 
   socket.on('message', async (data: RawData) => {
@@ -174,8 +159,6 @@ wss.on('connection', (socket: WebSocket) => {
     if (parsed.type === 'select_conversation') {
       activeSessionId = parsed.sessionId
       activeProject = parsed.project ?? activeProject
-      activeSession?.close()
-      activeSession = null
       const { messages, model } = await loadConversation(parsed.sessionId, parsed.project)
       if (model) activeModel = model
       send({
@@ -188,8 +171,6 @@ wss.on('connection', (socket: WebSocket) => {
     }
 
     if (parsed.type === 'new_conversation') {
-      activeSession?.close()
-      activeSession = null
       activeSessionId = null
       if (parsed.project) activeProject = parsed.project
       send({ type: 'conversation', sessionId: null, messages: [], currentProject: activeProject })
@@ -216,10 +197,13 @@ wss.on('connection', (socket: WebSocket) => {
       send({ type: 'message', message: buildUserMessage(parsed.text ?? '', attachments) })
 
       try {
-        const session = await ensureSession()
-        await session.send(prompt)
-        for await (const msg of session.stream()) {
-          if (msg.session_id && !activeSessionId) activeSessionId = msg.session_id
+        const options = {
+          model: activeModel,
+          cwd: resolveQueryCwd(),
+          ...(activeSessionId ? { resume: activeSessionId } : {})
+        }
+        for await (const msg of query({ prompt, options })) {
+          if (msg.session_id) activeSessionId = msg.session_id
           const uiMessage = sdkMessageToUI(msg)
           if (uiMessage) send({ type: 'message', message: uiMessage })
         }
@@ -235,9 +219,9 @@ wss.on('connection', (socket: WebSocket) => {
   })
 
   socket.on('close', () => {
-    activeSession?.close()
-    activeSession = null
+    unsubscribeConversations()
   })
+
 })
 
 console.log(`cc-mobile server listening on ws://localhost:${PORT}`)

@@ -1,8 +1,9 @@
 import fs from 'fs/promises'
-import type { Dirent } from 'fs'
+import { createReadStream, type Dirent, type FSWatcher, watch } from 'fs'
 import path from 'path'
 import os from 'os'
 import crypto from 'crypto'
+import readline from 'readline'
 
 export type UIBlock = {
   type: 'text' | 'tool_use' | 'tool_result' | 'reasoning' | 'attachment' | 'other'
@@ -35,22 +36,29 @@ export type DirectoryListing = {
   entries: string[]
 }
 
-type HistoryEntry = {
-  display?: string
-  timestamp?: number
-  project?: string
-  sessionId?: string
-}
-
-type SessionIndex = Map<string, { filePath: string }>
-
 const CLAUDE_HOME = process.env.CLAUDE_HOME ?? path.join(os.homedir(), '.claude')
-const HISTORY_PATH = path.join(CLAUDE_HOME, 'history.jsonl')
 const PROJECTS_DIR = path.join(CLAUDE_HOME, 'projects')
 const ROOT_DIR = path.resolve(process.env.CC_MOBILE_ROOT ?? os.homedir())
 const SHOW_HIDDEN = process.env.CC_MOBILE_SHOW_HIDDEN === '1'
 
-let sessionIndex: SessionIndex | null = null
+type CachedConversation = ConversationSummary & {
+  filePath: string
+  mtimeMs: number
+  size: number
+  projectDir: string
+}
+
+type ConversationListener = (conversations: ConversationSummary[]) => void
+
+const conversationCache = new Map<string, CachedConversation>()
+const projectWatchers = new Map<string, FSWatcher>()
+const conversationListeners = new Set<ConversationListener>()
+let projectsWatcher: FSWatcher | null = null
+let refreshPromise: Promise<{ conversations: ConversationSummary[]; changed: boolean }> | null = null
+let refreshTimer: NodeJS.Timeout | null = null
+let lastSnapshotKey = ''
+let watchersEnabled = false
+const SNAPSHOT_PROMPT_LIMIT = 120
 
 function encodeProjectPath(projectPath: string) {
   return projectPath.replace(/[\\/]/g, '-')
@@ -127,34 +135,201 @@ function normalizeBlocks(content: unknown): UIBlock[] {
   })
 }
 
-async function buildSessionIndex() {
-  const index: SessionIndex = new Map()
+function buildSnapshotKey(conversations: ConversationSummary[]) {
+  return conversations
+    .map((conversation) => {
+      const promptSnippet = conversation.firstPrompt.slice(0, SNAPSHOT_PROMPT_LIMIT)
+      return `${conversation.sessionId}:${conversation.updatedAt}:${conversation.project}:${promptSnippet}`
+    })
+    .join('|')
+}
+
+async function listProjectDirectories() {
   let entries: Dirent[] = []
   try {
     entries = await fs.readdir(PROJECTS_DIR, { withFileTypes: true, encoding: 'utf8' })
   } catch {
-    return index
+    return []
   }
 
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    const projectDir = path.join(PROJECTS_DIR, entry.name)
-    const files = await fs.readdir(projectDir, { withFileTypes: true, encoding: 'utf8' })
-    for (const file of files) {
-      if (!file.isFile()) continue
-      if (!file.name.endsWith('.jsonl')) continue
-      const sessionId = file.name.replace(/\.jsonl$/, '')
-      index.set(sessionId, { filePath: path.join(projectDir, file.name) })
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => ({ name: entry.name, path: path.join(PROJECTS_DIR, entry.name) }))
+}
+
+async function readSessionMetadata(filePath: string) {
+  let project = ''
+  let firstPrompt = ''
+  const stream = createReadStream(filePath, { encoding: 'utf8' })
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
+  let linesRead = 0
+
+  try {
+    for await (const line of rl) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      linesRead += 1
+      let record: any = null
+      try {
+        record = JSON.parse(trimmed)
+      } catch {
+        continue
+      }
+      if (!project && typeof record?.cwd === 'string') {
+        project = record.cwd.trim()
+      }
+      if (!firstPrompt && record?.type === 'user' && !record?.isMeta) {
+        const text = extractText(record.message?.content)
+        if (text.trim()) firstPrompt = text.trim()
+      }
+      if (project && firstPrompt) break
+      if (linesRead >= 200) break
+    }
+  } catch {
+  } finally {
+    rl.close()
+    stream.destroy()
+  }
+
+  return { project, firstPrompt }
+}
+
+function syncProjectWatchers(projectDirs: string[]) {
+  const next = new Set(projectDirs)
+  for (const dir of projectDirs) {
+    if (projectWatchers.has(dir)) continue
+    try {
+      const watcher = watch(dir, { persistent: false }, () => scheduleConversationRefresh())
+      projectWatchers.set(dir, watcher)
+    } catch {
+      continue
     }
   }
 
-  return index
+  for (const [dir, watcher] of projectWatchers) {
+    if (next.has(dir)) continue
+    watcher.close()
+    projectWatchers.delete(dir)
+  }
 }
 
-async function getSessionIndex() {
-  if (sessionIndex) return sessionIndex
-  sessionIndex = await buildSessionIndex()
-  return sessionIndex
+function ensureProjectsWatcher() {
+  if (projectsWatcher) return
+  try {
+    projectsWatcher = watch(PROJECTS_DIR, { persistent: false }, () => scheduleConversationRefresh())
+  } catch {
+    projectsWatcher = null
+  }
+}
+
+function stopWatchersIfIdle() {
+  if (conversationListeners.size > 0) return
+  for (const watcher of projectWatchers.values()) {
+    watcher.close()
+  }
+  projectWatchers.clear()
+  if (projectsWatcher) {
+    projectsWatcher.close()
+    projectsWatcher = null
+  }
+  watchersEnabled = false
+}
+
+function scheduleConversationRefresh() {
+  if (!watchersEnabled) return
+  if (refreshTimer) clearTimeout(refreshTimer)
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null
+    void emitConversationUpdates()
+  }, 150)
+}
+
+async function emitConversationUpdates() {
+  try {
+    const { conversations, changed } = await refreshConversationCache()
+    if (!changed) return
+    for (const listener of conversationListeners) {
+      listener(conversations)
+    }
+  } catch {
+  }
+}
+
+async function refreshConversationCache() {
+  if (refreshPromise) return refreshPromise
+  refreshPromise = (async () => {
+    const projectDirs = await listProjectDirectories()
+    if (watchersEnabled) {
+      ensureProjectsWatcher()
+      syncProjectWatchers(projectDirs.map((entry) => entry.path))
+    }
+
+    const nextCache = new Map<string, CachedConversation>()
+    for (const projectDir of projectDirs) {
+      let files: Dirent[] = []
+      try {
+        files = await fs.readdir(projectDir.path, { withFileTypes: true, encoding: 'utf8' })
+      } catch {
+        continue
+      }
+      for (const file of files) {
+        if (!file.isFile()) continue
+        if (!file.name.endsWith('.jsonl')) continue
+        const sessionId = file.name.replace(/\.jsonl$/, '')
+        const filePath = path.join(projectDir.path, file.name)
+        let stats: { mtimeMs: number; size: number }
+        try {
+          const stat = await fs.stat(filePath)
+          stats = { mtimeMs: stat.mtimeMs, size: stat.size }
+        } catch {
+          continue
+        }
+
+        const cached = conversationCache.get(sessionId)
+        if (
+          cached &&
+          cached.filePath === filePath &&
+          cached.mtimeMs === stats.mtimeMs &&
+          cached.size === stats.size
+        ) {
+          nextCache.set(sessionId, { ...cached, updatedAt: stats.mtimeMs })
+          continue
+        }
+
+        const { project, firstPrompt } = await readSessionMetadata(filePath)
+        const resolvedProject = project || cached?.project || projectDir.name
+        nextCache.set(sessionId, {
+          sessionId,
+          project: resolvedProject,
+          firstPrompt,
+          updatedAt: stats.mtimeMs,
+          filePath,
+          mtimeMs: stats.mtimeMs,
+          size: stats.size,
+          projectDir: projectDir.path
+        })
+      }
+    }
+
+    conversationCache.clear()
+    for (const [sessionId, entry] of nextCache) {
+      conversationCache.set(sessionId, entry)
+    }
+
+    const conversations = Array.from(nextCache.values()).map(
+      ({ filePath, mtimeMs, size, projectDir, ...summary }) => summary
+    )
+    conversations.sort((a, b) => b.updatedAt - a.updatedAt)
+    const snapshotKey = buildSnapshotKey(conversations)
+    const changed = snapshotKey !== lastSnapshotKey
+    lastSnapshotKey = snapshotKey
+
+    return { conversations, changed }
+  })().finally(() => {
+    refreshPromise = null
+  })
+
+  return refreshPromise
 }
 
 function clampToRoot(targetPath: string) {
@@ -170,85 +345,30 @@ async function resolveSessionFile(sessionId: string, project?: string) {
     const candidate = path.join(PROJECTS_DIR, encodeProjectPath(project), `${sessionId}.jsonl`)
     if (await fileExists(candidate)) return candidate
   }
-  const index = await getSessionIndex()
-  return index.get(sessionId)?.filePath ?? null
+  const cached = conversationCache.get(sessionId)
+  if (cached) return cached.filePath
+  const { conversations } = await refreshConversationCache()
+  const found = conversations.find((conversation) => conversation.sessionId === sessionId)
+  if (!found) return null
+  return conversationCache.get(sessionId)?.filePath ?? null
 }
 
-async function getFirstPrompt(sessionFile: string) {
-  const records = await readJsonLines(sessionFile)
-  for (const record of records) {
-    if (record?.type !== 'user') continue
-    if (record?.isMeta) continue
-    const text = extractText(record.message?.content)
-    if (text.trim()) return text.trim()
+export function watchConversations(listener: ConversationListener) {
+  conversationListeners.add(listener)
+  watchersEnabled = true
+  ensureProjectsWatcher()
+  void refreshConversationCache()
+    .then(({ conversations }) => listener(conversations))
+    .catch(() => {})
+  return () => {
+    conversationListeners.delete(listener)
+    stopWatchersIfIdle()
   }
-  return ''
-}
-
-function getLatestProject(history: HistoryEntry[]) {
-  for (let i = history.length - 1; i >= 0; i -= 1) {
-    if (history[i].project) return history[i].project ?? null
-  }
-  return null
-}
-
-function getLatestSessionForProject(history: HistoryEntry[], project: string) {
-  for (let i = history.length - 1; i >= 0; i -= 1) {
-    const entry = history[i]
-    if (entry.project === project && entry.sessionId) return entry.sessionId
-  }
-  return null
-}
-
-function getProjectForSession(history: HistoryEntry[], sessionId: string) {
-  for (let i = history.length - 1; i >= 0; i -= 1) {
-    const entry = history[i]
-    if (entry.sessionId === sessionId && entry.project) return entry.project
-  }
-  return null
-}
-
-export async function readHistory() {
-  const entries = (await readJsonLines(HISTORY_PATH)) as HistoryEntry[]
-  return entries.map((entry) => ({
-    ...entry,
-    project: typeof entry.project === 'string' ? entry.project.trim() : entry.project,
-    sessionId: typeof entry.sessionId === 'string' ? entry.sessionId.trim() : entry.sessionId
-  }))
 }
 
 export async function listConversations() {
-  const history = await readHistory()
-  const latestBySession = new Map<string, HistoryEntry>()
-
-  for (const entry of history) {
-    if (!entry.sessionId || !entry.project) continue
-    const existing = latestBySession.get(entry.sessionId)
-    const nextTimestamp = entry.timestamp ?? 0
-    const existingTimestamp = existing?.timestamp ?? 0
-    if (!existing || nextTimestamp >= existingTimestamp) {
-      latestBySession.set(entry.sessionId, entry)
-    }
-  }
-
-  const ordered = Array.from(latestBySession.values()).sort(
-    (a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0)
-  )
-
-  const summaries: ConversationSummary[] = []
-  for (const entry of ordered) {
-    if (!entry.sessionId || !entry.project) continue
-    const sessionFile = await resolveSessionFile(entry.sessionId, entry.project)
-    const firstPrompt = sessionFile ? await getFirstPrompt(sessionFile) : entry.display ?? ''
-    summaries.push({
-      sessionId: entry.sessionId,
-      project: entry.project,
-      firstPrompt,
-      updatedAt: entry.timestamp ?? 0
-    })
-  }
-
-  return summaries
+  const { conversations } = await refreshConversationCache()
+  return conversations
 }
 
 export async function listDirectories(requestPath?: string | null): Promise<DirectoryListing> {
@@ -320,21 +440,12 @@ export async function loadConversation(sessionId: string, project?: string) {
 }
 
 export async function getBootstrapState() {
-  const history = await readHistory()
-  const currentProject = getLatestProject(history)
   const conversations = await listConversations()
-
-  let activeConversationId: string | null = null
-  if (currentProject) {
-    activeConversationId = getLatestSessionForProject(history, currentProject)
-  }
-  if (!activeConversationId && conversations.length > 0) {
-    activeConversationId = conversations[0].sessionId
-  }
-
-  const projectForActive = activeConversationId ? getProjectForSession(history, activeConversationId) : null
+  const activeConversation = conversations[0] ?? null
+  const activeConversationId = activeConversation?.sessionId ?? null
+  const currentProject = activeConversation?.project ?? null
   const { messages, model } = activeConversationId
-    ? await loadConversation(activeConversationId, projectForActive ?? undefined)
+    ? await loadConversation(activeConversationId, activeConversation?.project ?? undefined)
     : { messages: [], model: null }
 
   return {

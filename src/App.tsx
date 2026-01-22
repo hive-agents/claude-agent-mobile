@@ -265,7 +265,10 @@ export default function App() {
     return items
   }, [dirPath])
 
-  const requestDirList = (path: string | null) => {
+  const requestDirList = (path: string | null, options: { resetSearch?: boolean } = {}) => {
+    if (options.resetSearch) {
+      setSearchQuery('')
+    }
     setDirLoading(true)
     setDirError(null)
     setDirEntries([])
@@ -331,7 +334,7 @@ export default function App() {
 
   const handleNavigateDir = (entry: string) => {
     if (!dirPath) return
-    requestDirList(`${dirPath}/${entry}`)
+    requestDirList(`${dirPath}/${entry}`, { resetSearch: true })
   }
 
   const handleUseFolder = () => {
@@ -532,7 +535,7 @@ export default function App() {
                   <button
                     type="button"
                     className="crumb-button"
-                    onClick={() => requestDirList('/')}
+                    onClick={() => requestDirList('/', { resetSearch: true })}
                   >
                     /
                   </button>
@@ -542,7 +545,7 @@ export default function App() {
                       <button
                         type="button"
                         className="crumb-button"
-                        onClick={() => requestDirList(crumb.path)}
+                        onClick={() => requestDirList(crumb.path, { resetSearch: true })}
                       >
                         {crumb.label}
                       </button>
@@ -655,20 +658,28 @@ export default function App() {
         ) : null}
         {displayItems.map((item) => {
           if (item.kind === 'message') {
+            const roleClass = item.meta?.isMeta
+              ? 'meta'
+              : item.role === 'user'
+                ? 'user'
+                : item.role === 'tool'
+                  ? 'tool'
+                  : 'assistant'
+            const roleLabel =
+              item.role === 'user'
+                ? 'User'
+                : item.role === 'assistant'
+                  ? 'Agent'
+                  : item.role === 'tool'
+                    ? 'Tool'
+                    : 'System'
+            const showRoleLabel = item.role === 'user' || item.role === 'assistant'
             return (
-              <div
-                key={item.id}
-                className={
-                  item.meta?.isMeta
-                    ? 'message meta'
-                    : item.role === 'user'
-                      ? 'message user'
-                      : item.role === 'tool'
-                        ? 'message tool'
-                        : 'message'
-                }
-              >
-                {renderMessageBlocks(item)}
+              <div key={item.id} className="chat-item">
+                <div className={`message ${roleClass}`}>
+                  {showRoleLabel ? <div className="message-label">{roleLabel}</div> : null}
+                  {renderMessageBlocks(item)}
+                </div>
               </div>
             )
           }
@@ -678,56 +689,65 @@ export default function App() {
           const toolsToShow = isStackExpanded ? item.tools : [item.tools[0]]
 
           return (
-            <div key={item.id} className={stackCollapsed ? 'tool-stack stacked' : 'tool-stack'}>
-              <div className="tool-stack-header">
-                <div className="tool-stack-title">Tool uses</div>
-                {item.tools.length > 1 ? (
-                  <button
-                    type="button"
-                    className="stack-toggle"
-                    onClick={() => toggleStack(item.id)}
-                  >
-                    {isStackExpanded ? 'Collapse stack' : `Stack x${item.tools.length}`}
-                  </button>
-                ) : null}
-              </div>
-              <div className="tool-stack-list">
-                {toolsToShow.map((tool) => {
-                  const isOpen = !!expandedTools[tool.id]
-                  return (
-                    <div key={tool.id} className={isOpen ? 'tool-card open' : 'tool-card'}>
-                      <button type="button" className="tool-line" onClick={() => toggleTool(tool.id)}>
-                        <span className="tool-line-title">Tool use: {tool.name}</span>
-                      </button>
-                      {isOpen ? (
-                        <div className="tool-details">
-                          {tool.input ? (
-                            <div className="tool-detail">
-                              <div className="tool-detail-label">Input</div>
-                              <pre>{tool.input}</pre>
-                            </div>
-                          ) : null}
-                          {tool.result ? (
-                            <div className="tool-detail">
-                              <div className="tool-detail-label">Result</div>
-                              <pre>{tool.result}</pre>
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  )
-                })}
+            <div key={item.id} className="chat-item">
+              <div className={stackCollapsed ? 'tool-stack stacked' : 'tool-stack'}>
+                <div className="tool-stack-header">
+                  <div className="tool-stack-title">Tool uses</div>
+                  {item.tools.length > 1 ? (
+                    <button
+                      type="button"
+                      className="stack-toggle"
+                      onClick={() => toggleStack(item.id)}
+                    >
+                      {isStackExpanded ? 'Collapse stack' : `Stack x${item.tools.length}`}
+                    </button>
+                  ) : null}
+                </div>
+                <div className="tool-stack-list">
+                  {toolsToShow.map((tool) => {
+                    const isOpen = !!expandedTools[tool.id]
+                    return (
+                      <div key={tool.id} className={isOpen ? 'tool-card open' : 'tool-card'}>
+                        <button
+                          type="button"
+                          className="tool-line"
+                          onClick={() => toggleTool(tool.id)}
+                        >
+                          <span className="tool-line-title">Tool use: {tool.name}</span>
+                        </button>
+                        {isOpen ? (
+                          <div className="tool-details">
+                            {tool.input ? (
+                              <div className="tool-detail">
+                                <div className="tool-detail-label">Input</div>
+                                <pre>{tool.input}</pre>
+                              </div>
+                            ) : null}
+                            {tool.result ? (
+                              <div className="tool-detail">
+                                <div className="tool-detail-label">Result</div>
+                                <pre>{tool.result}</pre>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             </div>
           )
         })}
         {isProcessing ? (
-          <div className="message">
-            <div className="processing" aria-label="Processing">
-              <span>.</span>
-              <span>.</span>
-              <span>.</span>
+          <div className="chat-item">
+            <div className="message assistant">
+              <div className="message-label">Agent</div>
+              <div className="processing" aria-label="Processing">
+                <span>.</span>
+                <span>.</span>
+                <span>.</span>
+              </div>
             </div>
           </div>
         ) : null}

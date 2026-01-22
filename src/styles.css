@@ -207,38 +207,67 @@ body::before {
   padding: 8px 16px 24px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 0;
+}
+
+.chat-item {
+  padding: 18px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent 30%);
+}
+
+.chat-item:last-child {
+  border-bottom: none;
 }
 
 .message {
-  max-width: 84%;
-  padding: 12px 14px;
-  border-radius: 16px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  box-shadow: var(--shadow-soft);
-  line-height: 1.45;
-  font-size: 0.95rem;
+  width: 100%;
+  max-width: none;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  line-height: 1.5;
+  font-size: 0.98rem;
   overflow-wrap: anywhere;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .message.user {
-  margin-left: auto;
-  background: color-mix(in srgb, var(--accent) 22%, var(--surface) 78%);
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--border) 50%);
+  --label-ink: var(--accent-strong);
+}
+
+.message.assistant {
+  --label-ink: var(--muted);
 }
 
 .message.meta {
   font-size: 0.85rem;
   color: var(--muted);
-  border-style: dashed;
 }
 
 .message.tool {
-  margin-left: auto;
-  margin-right: auto;
-  text-align: center;
-  background: var(--surface-strong);
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.message-label {
+  position: sticky;
+  top: 12px;
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--label-ink, var(--muted)) 35%, var(--border) 65%);
+  background: color-mix(in srgb, var(--surface) 92%, transparent 8%);
+  color: var(--label-ink, var(--muted));
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  z-index: 4;
+  margin-bottom: 8px;
+  margin-left: 44px;
 }
 
 .message h4 {
@@ -390,9 +419,10 @@ body::before {
 
 .tool-stack {
   position: relative;
-  max-width: 92%;
-  margin: 0 auto;
-  padding: 8px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
 }
 
 .tool-stack.stacked::before,
@@ -742,11 +772,15 @@ body::before {
   font: inherit;
   cursor: pointer;
   overflow: hidden;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
 }
 
 .project-entry-name {
   font-size: 0.9rem;
   color: var(--ink);
+  line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -835,10 +869,4 @@ body::before {
   border: 1px solid var(--border);
   padding: 4px 10px;
   border-radius: 999px;
-}
-
-@media (max-width: 480px) {
-  .message {
-    max-width: 92%;
-  }
 }
