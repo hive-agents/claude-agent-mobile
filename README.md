@@ -48,7 +48,7 @@ Auth is enforced on the WebSocket upgrade using a session cookie. There are thre
 
 - `CAM_AUTH_MODE=off`: allow all connections (local dev).
 - `CAM_AUTH_MODE=builtin`: show the password modal; `/cam-login` issues a session cookie.
-- `CAM_AUTH_MODE=external`: accept a host-provided cookie; optionally verify with a shared secret.
+- `CAM_AUTH_MODE=external`: accept a host-provided cookie and verify it with an auth endpoint.
 
 Builtin mode expects a bcrypt hash, and the client sends a bcrypt-hashed password over TLS.
 
@@ -66,6 +66,8 @@ Optional env:
 - `CAM_AUTH_LOGOUT_PATH`: logout endpoint (default `/cam-logout`).
 - `CAM_AUTH_STATUS_PATH`: status endpoint (default `/cam-auth/status`).
 - `CAM_AUTH_EXTERNAL_SIGNING_SECRET`: if set, external mode verifies the cookie signature.
+- `CAM_AUTH_EXTERNAL_VERIFY_URL`: required in external mode; e.g. `https://apiary.host/api/me`.
+- `CAM_AUTH_EXTERNAL_VERIFY_TIMEOUT_MS`: request timeout in ms (default `5000`).
 - `CAM_AUTH_CORS_ORIGIN`: comma-separated list or `*` to allow cross-origin auth requests.
 
 Generate a bcrypt hash:
@@ -99,4 +101,5 @@ CAM_AUTH_COOKIE_SECURE=true
 CAM_AUTH_MODE=external
 CAM_AUTH_COOKIE_NAME="cam_session"
 CAM_AUTH_EXTERNAL_SIGNING_SECRET="shared-secret-from-host" # optional
+CAM_AUTH_EXTERNAL_VERIFY_URL="https://apiary.host/api/me"
 ```
