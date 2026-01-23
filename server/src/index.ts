@@ -2,7 +2,7 @@ import { WebSocketServer, type RawData, type WebSocket } from 'ws'
 import crypto from 'crypto'
 import http, { type IncomingMessage, type ServerResponse } from 'http'
 import https from 'https'
-import type { Socket } from 'net'
+import type { Duplex } from 'stream'
 import { query, type PermissionMode, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import {
   getBootstrapState,
@@ -205,7 +205,7 @@ async function handleAuthStatus(req: IncomingMessage, res: ServerResponse) {
   )
 }
 
-async function handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer) {
+async function handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
   if (url.pathname !== WS_PATH) {
     socket.destroy()
