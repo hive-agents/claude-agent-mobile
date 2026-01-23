@@ -1,6 +1,8 @@
 import { WebSocketServer, type RawData, type WebSocket } from 'ws'
 import crypto from 'crypto'
-import http, { type IncomingMessage } from 'http'
+import http, { type IncomingMessage, type ServerResponse } from 'http'
+import https from 'https'
+import type { Socket } from 'net'
 import { query, type PermissionMode, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import {
   getBootstrapState,
@@ -42,6 +44,8 @@ const AUTH_EXTERNAL_SIGNING_SECRET = process.env.CAM_AUTH_EXTERNAL_SIGNING_SECRE
 const AUTH_COOKIE_TTL_SECONDS = Number(process.env.CAM_AUTH_COOKIE_TTL_SECONDS ?? 60 * 60 * 24 * 30)
 const AUTH_COOKIE_SECURE = (process.env.CAM_AUTH_COOKIE_SECURE ?? 'false').toLowerCase() === 'true'
 const AUTH_CORS_ORIGIN = process.env.CAM_AUTH_CORS_ORIGIN ?? ''
+const AUTH_EXTERNAL_VERIFY_URL = process.env.CAM_AUTH_EXTERNAL_VERIFY_URL ?? ''
+const AUTH_EXTERNAL_VERIFY_TIMEOUT_MS = Number(process.env.CAM_AUTH_EXTERNAL_VERIFY_TIMEOUT_MS ?? 5000)
 
 const wss = new WebSocketServer({ noServer: true })
 
@@ -101,16 +105,59 @@ function verifySignedToken(token: string, secret: string) {
   }
 }
 
-function isAuthorized(req: IncomingMessage) {
+function authCookieHeader(token: string) {
+  return `${AUTH_COOKIE_NAME}=${encodeURIComponent(token)}`
+}
+
+function verifyExternalSession(token: string) {
+  if (!AUTH_EXTERNAL_VERIFY_URL) return Promise.resolve(false)
+  let url: URL
+  try {
+    url = new URL(AUTH_EXTERNAL_VERIFY_URL)
+  } catch {
+    return Promise.resolve(false)
+  }
+  const client = url.protocol === 'https:' ? https : http
+  const port = url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80
+  const path = `${url.pathname}${url.search}`
+
+  return new Promise<boolean>((resolve) => {
+    const req = client.request(
+      {
+        method: 'GET',
+        hostname: url.hostname,
+        port,
+        path,
+        headers: {
+          Accept: 'application/json',
+          Cookie: authCookieHeader(token)
+        },
+        timeout: AUTH_EXTERNAL_VERIFY_TIMEOUT_MS
+      },
+      (res) => {
+        res.resume()
+        resolve(res.statusCode === 200)
+      }
+    )
+    req.on('timeout', () => {
+      req.destroy()
+      resolve(false)
+    })
+    req.on('error', () => resolve(false))
+    req.end()
+  })
+}
+
+async function isAuthorized(req: IncomingMessage) {
   if (AUTH_MODE === 'off') return true
   const cookies = parseCookies(req.headers.cookie)
   const token = cookies[AUTH_COOKIE_NAME]
   if (!token) return false
   if (AUTH_MODE === 'external') {
-    if (AUTH_EXTERNAL_SIGNING_SECRET) {
-      return verifySignedToken(token, AUTH_EXTERNAL_SIGNING_SECRET)
+    if (AUTH_EXTERNAL_SIGNING_SECRET && !verifySignedToken(token, AUTH_EXTERNAL_SIGNING_SECRET)) {
+      return false
     }
-    return true
+    return verifyExternalSession(token)
   }
   if (AUTH_MODE === 'builtin') {
     if (!AUTH_SIGNING_SECRET) return false
@@ -140,6 +187,38 @@ function setAuthCookie(res: http.ServerResponse, token: string | null) {
   ]
   if (AUTH_COOKIE_SECURE) parts.push('Secure')
   res.setHeader('Set-Cookie', parts.join('; '))
+}
+
+async function handleAuthStatus(req: IncomingMessage, res: ServerResponse) {
+  const authorized = await isAuthorized(req)
+  setCorsHeaders(req, res)
+  res.setHeader('Content-Type', 'application/json')
+  res.writeHead(200)
+  res.end(
+    JSON.stringify({
+      mode: AUTH_MODE,
+      authorized,
+      loginPath: AUTH_LOGIN_PATH,
+      logoutPath: AUTH_LOGOUT_PATH,
+      salt: AUTH_MODE === 'builtin' ? AUTH_PASSWORD_HASH : null
+    })
+  )
+}
+
+async function handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer) {
+  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
+  if (url.pathname !== WS_PATH) {
+    socket.destroy()
+    return
+  }
+  if (!(await isAuthorized(req))) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
+    socket.destroy()
+    return
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit('connection', ws, req)
+  })
 }
 
 const server = http.createServer((req, res) => {
@@ -220,19 +299,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === AUTH_STATUS_PATH && req.method === 'GET') {
-    const authorized = isAuthorized(req)
-    setCorsHeaders(req, res)
-    res.setHeader('Content-Type', 'application/json')
-    res.writeHead(200)
-    res.end(
-      JSON.stringify({
-        mode: AUTH_MODE,
-        authorized,
-        loginPath: AUTH_LOGIN_PATH,
-        logoutPath: AUTH_LOGOUT_PATH,
-        salt: AUTH_MODE === 'builtin' ? AUTH_PASSWORD_HASH : null
-      })
-    )
+    void handleAuthStatus(req, res)
     return
   }
 
@@ -241,19 +308,7 @@ const server = http.createServer((req, res) => {
 })
 
 server.on('upgrade', (req, socket, head) => {
-  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
-  if (url.pathname !== WS_PATH) {
-    socket.destroy()
-    return
-  }
-  if (!isAuthorized(req)) {
-    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
-    socket.destroy()
-    return
-  }
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit('connection', ws, req)
-  })
+  void handleUpgrade(req, socket, head)
 })
 
 function normalizeBlocks(content: unknown): UIBlock[] {
