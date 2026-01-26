@@ -1274,6 +1274,28 @@ body::before {
   border-radius: 999px;
 }
 
+.connection-banner {
+  position: fixed;
+  top: calc(var(--safe-top) + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  text-align: center;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  border-radius: 999px;
+  box-shadow: var(--shadow-soft);
+  z-index: 8;
+  max-width: calc(100% - 32px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .scroll-jumps {
   position: fixed;
   right: calc(16px + var(--safe-right));

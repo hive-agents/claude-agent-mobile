@@ -251,6 +251,8 @@ export default function App() {
     | { type: 'image'; name: string; mediaType: string; data: string }
   >>([])
   const [wsStatus, setWsStatus] = useState<'connecting' | 'open' | 'closed'>('connecting')
+  const [connectionNotice, setConnectionNotice] = useState<string | null>(null)
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine)
   const [isAtTop, setIsAtTop] = useState(true)
   const [isAtBottom, setIsAtBottom] = useState(true)
   const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null)
@@ -258,6 +260,11 @@ export default function App() {
   const [questionAnswers, setQuestionAnswers] = useState<Record<string, string | string[]>>({})
 
   const wsRef = useRef<WebSocket | null>(null)
+  const reconnectTimerRef = useRef<number | null>(null)
+  const reconnectAttemptRef = useRef(0)
+  const shouldReconnectRef = useRef(true)
+  const suppressCloseRef = useRef(false)
+  const connectWebSocketRef = useRef<(options?: { force?: boolean }) => void>(() => {})
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
@@ -289,21 +296,78 @@ export default function App() {
     }
   }, [])
 
-  const connectWebSocket = useCallback(() => {
-    if (wsRef.current) {
-      wsRef.current.close()
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
     }
+  }, [])
+
+  const scheduleReconnect = useCallback((reason: string) => {
+    if (!shouldReconnectRef.current) return
+    if (!navigator.onLine) {
+      setIsOnline(false)
+      setWsStatus('closed')
+      setConnectionNotice('Offline')
+      return
+    }
+    if (reconnectTimerRef.current !== null) return
+    const attempt = reconnectAttemptRef.current
+    const baseDelay = Math.min(15000, 1000 * 2 ** attempt)
+    const jitter = Math.round(Math.random() * 400)
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null
+      reconnectAttemptRef.current = Math.min(reconnectAttemptRef.current + 1, 6)
+      connectWebSocketRef.current({ force: true })
+    }, baseDelay + jitter)
+    setWsStatus('connecting')
+    setConnectionNotice(reason)
+  }, [])
+
+  const connectWebSocket = useCallback((options: { force?: boolean } = {}) => {
+    if (!navigator.onLine) {
+      setIsOnline(false)
+      setWsStatus('closed')
+      setConnectionNotice('Offline')
+      return
+    }
+    const existing = wsRef.current
+    if (existing) {
+      const isOpen = existing.readyState === WebSocket.OPEN
+      const isConnecting = existing.readyState === WebSocket.CONNECTING
+      if ((isOpen || isConnecting) && !options.force) {
+        return
+      }
+      suppressCloseRef.current = true
+      existing.close()
+    }
+    clearReconnectTimer()
     setWsStatus('connecting')
     const ws = new WebSocket(WS_URL)
     wsRef.current = ws
 
     ws.onopen = () => {
       setWsStatus('open')
+      setConnectionNotice(null)
+      setIsOnline(true)
+      reconnectAttemptRef.current = 0
       ws.send(JSON.stringify({ type: 'init' }))
     }
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      if (suppressCloseRef.current) {
+        suppressCloseRef.current = false
+        return
+      }
       setWsStatus('closed')
+      if (!shouldReconnectRef.current) return
+      const reason = event.reason ? event.reason : 'Server closed. Reconnecting...'
+      scheduleReconnect(reason)
+    }
+
+    ws.onerror = () => {
+      if (!shouldReconnectRef.current) return
+      scheduleReconnect('Connection error. Reconnecting...')
     }
 
     ws.onmessage = (event) => {
@@ -347,6 +411,9 @@ export default function App() {
           setConversations(payload.conversations)
         }
         if (payload.type === 'error') {
+          if (/server closed|disconnected|connection (lost|closed)|socket/i.test(payload.error)) {
+            setConnectionNotice(payload.error)
+          }
           setMessages((prev) => [
             ...prev,
             {
@@ -395,7 +462,11 @@ export default function App() {
         ])
       }
     }
-  }, [])
+  }, [clearReconnectTimer, scheduleReconnect])
+
+  useEffect(() => {
+    connectWebSocketRef.current = connectWebSocket
+  }, [connectWebSocket])
 
   useEffect(() => {
     refreshAuthStatus()
@@ -483,12 +554,57 @@ export default function App() {
 
   useEffect(() => {
     if (authStatusLoading) return
-    if (authMode === 'builtin' && !authAuthorized) return
-    connectWebSocket()
+    if ((authMode === 'builtin' || authMode === 'external') && !authAuthorized) {
+      shouldReconnectRef.current = false
+      clearReconnectTimer()
+      wsRef.current?.close()
+      return
+    }
+    shouldReconnectRef.current = true
+    connectWebSocket({ force: true })
     return () => {
+      shouldReconnectRef.current = false
+      clearReconnectTimer()
       wsRef.current?.close()
     }
-  }, [authStatusLoading, authMode, authAuthorized, connectWebSocket])
+  }, [authStatusLoading, authMode, authAuthorized, clearReconnectTimer, connectWebSocket])
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true)
+      reconnectAttemptRef.current = 0
+      if ((authMode === 'builtin' || authMode === 'external') && !authAuthorized) return
+      shouldReconnectRef.current = true
+      connectWebSocketRef.current({ force: true })
+    }
+    const handleOffline = () => {
+      setIsOnline(false)
+      setWsStatus('closed')
+      setConnectionNotice('Offline')
+      clearReconnectTimer()
+    }
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [authMode, authAuthorized, clearReconnectTimer])
+
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState !== 'visible') return
+      if (!navigator.onLine) return
+      if ((authMode === 'builtin' || authMode === 'external') && !authAuthorized) return
+      if (wsStatus === 'open') return
+      shouldReconnectRef.current = true
+      connectWebSocketRef.current({ force: true })
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
+  }, [authMode, authAuthorized, wsStatus])
 
   useEffect(() => {
     const ua = navigator.userAgent
@@ -1069,14 +1185,24 @@ export default function App() {
     return renderBlocks(item.blocks, item.id)
   }
 
-  const loginRequired = authMode === 'builtin' && !authAuthorized
+  const builtinLoginRequired = authMode === 'builtin' && !authAuthorized
+  const externalLoginRequired = authMode === 'external' && !authAuthorized
+  const connectionBannerText = useMemo(() => {
+    if (!isOnline) return 'Offline'
+    if (connectionNotice) return connectionNotice
+    if (wsStatus === 'open') return null
+    return wsStatus === 'connecting' ? 'Connecting...' : 'Server closed. Reconnecting...'
+  }, [connectionNotice, isOnline, wsStatus])
   const overlayOpen = drawerOpen || projectPickerOpen
   const showScrollJumps = !overlayOpen && !isAtTop && !isAtBottom
 
   return (
     <div className="app">
       <div className="safe-top-glass" aria-hidden="true" />
-      {loginRequired ? (
+      {connectionBannerText ? (
+        <div className="connection-banner">{connectionBannerText}</div>
+      ) : null}
+      {builtinLoginRequired ? (
         <div className="auth-overlay">
           <div className="auth-modal">
             <div className="auth-title">Unlock console</div>
@@ -1121,6 +1247,30 @@ export default function App() {
                 {loginPending ? 'Checking...' : 'Unlock'}
               </button>
             </form>
+          </div>
+        </div>
+      ) : null}
+      {externalLoginRequired ? (
+        <div className="auth-overlay">
+          <div className="auth-modal">
+            <div className="auth-title">Sign in required</div>
+            <div className="auth-subtitle">You need an active session to continue.</div>
+            <div className="auth-note">
+              Sign in at{' '}
+              <a
+                className="auth-link"
+                href="https://apiary.host"
+                target="_blank"
+                rel="noreferrer"
+              >
+                apiary.host
+              </a>
+              , then return and refresh.
+            </div>
+            {authStatusError ? <div className="auth-note">{authStatusError}</div> : null}
+            <button type="button" className="auth-button" onClick={refreshAuthStatus}>
+              Check again
+            </button>
           </div>
         </div>
       ) : null}
@@ -1412,9 +1562,6 @@ export default function App() {
         ) : (
           <div className="status-pill">No project detected</div>
         )}
-        {wsStatus !== 'open' ? (
-          <div className="status-pill">Server {wsStatus}</div>
-        ) : null}
         {displayItems.map((item) => {
           if (item.kind === 'message') {
             const roleClass = item.meta?.isMeta
