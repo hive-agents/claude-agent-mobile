@@ -1312,3 +1312,202 @@ body::before {
   width: 20px;
   height: 20px;
 }
+
+.permission-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.permission-content {
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 20px;
+  max-width: 400px;
+  width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.permission-content h3 {
+  margin: 0 0 12px;
+  font-size: 1.1rem;
+}
+
+.permission-tool {
+  font-family: var(--font-mono);
+  background: var(--bg);
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin: 0 0 12px;
+}
+
+.permission-reason {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0 0 12px;
+}
+
+.permission-path {
+  font-size: 0.85rem;
+  margin: 0 0 12px;
+}
+
+.permission-path code {
+  background: var(--bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+.permission-input {
+  margin: 0 0 16px;
+}
+
+.permission-input summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.permission-input pre {
+  background: var(--bg);
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  overflow-x: auto;
+  margin: 8px 0 0;
+}
+
+.permission-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.permission-actions button {
+  flex: 1;
+  min-width: 80px;
+  padding: 10px 8px;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-deny {
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.btn-allow {
+  background: var(--accent);
+  color: white;
+}
+
+.btn-allow-session {
+  background: var(--accent-strong);
+  color: white;
+}
+
+.question-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.question-content {
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 20px;
+  max-width: 400px;
+  width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.question-content h3 {
+  margin: 0 0 16px;
+  font-size: 1.1rem;
+}
+
+.question-item {
+  margin-bottom: 20px;
+}
+
+.question-item:last-child {
+  margin-bottom: 0;
+}
+
+.question-header {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin: 0 0 4px;
+}
+
+.question-text {
+  font-size: 0.95rem;
+  margin: 0 0 12px;
+}
+
+.question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.question-options .option {
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--surface-strong);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font: inherit;
+  color: var(--ink);
+}
+
+.question-options .option.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+
+.option-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.option-desc {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.question-actions {
+  margin-top: 16px;
+}
+
+.btn-submit {
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--accent);
+  color: white;
+}

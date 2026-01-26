@@ -83,6 +83,32 @@ type Breadcrumb = {
   path: string
 }
 
+type PermissionRequest = {
+  requestId: string
+  toolName: string
+  toolInput: Record<string, unknown>
+  blockedPath?: string
+  decisionReason?: string
+  toolUseID: string
+  suggestions?: Array<{
+    type: string
+    rules?: Array<{ toolName: string; ruleContent?: string }>
+    behavior?: string
+    destination?: string
+  }>
+}
+
+type UserQuestionRequest = {
+  requestId: string
+  toolUseId: string
+  questions: Array<{
+    question: string
+    header: string
+    options: Array<{ label: string; description: string }>
+    multiSelect: boolean
+  }>
+}
+
 type ServerPayload =
   | {
       type: 'bootstrap'
@@ -109,6 +135,8 @@ type ServerPayload =
   | { type: 'processing'; active: boolean }
   | { type: 'conversations'; conversations: ConversationSummary[] }
   | { type: 'error'; error: string }
+  | { type: 'permission_request'; requestId: string; toolName: string; toolInput: Record<string, unknown>; blockedPath?: string; decisionReason?: string; toolUseID: string; suggestions?: PermissionRequest['suggestions'] }
+  | { type: 'user_question'; requestId: string; toolUseId: string; questions: UserQuestionRequest['questions'] }
 
 type AuthStatus = {
   mode: 'off' | 'builtin' | 'external' | string
@@ -225,6 +253,9 @@ export default function App() {
   const [wsStatus, setWsStatus] = useState<'connecting' | 'open' | 'closed'>('connecting')
   const [isAtTop, setIsAtTop] = useState(true)
   const [isAtBottom, setIsAtBottom] = useState(true)
+  const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null)
+  const [questionRequest, setQuestionRequest] = useState<UserQuestionRequest | null>(null)
+  const [questionAnswers, setQuestionAnswers] = useState<Record<string, string | string[]>>({})
 
   const wsRef = useRef<WebSocket | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -324,6 +355,34 @@ export default function App() {
               blocks: [{ type: 'text', text: payload.error }]
             }
           ])
+        }
+        if (payload.type === 'permission_request') {
+          setPermissionRequest({
+            requestId: payload.requestId,
+            toolName: payload.toolName,
+            toolInput: payload.toolInput,
+            blockedPath: payload.blockedPath,
+            decisionReason: payload.decisionReason,
+            toolUseID: payload.toolUseID,
+            suggestions: payload.suggestions
+          })
+        }
+        if (payload.type === 'user_question') {
+          setQuestionRequest({
+            requestId: payload.requestId,
+            toolUseId: payload.toolUseId,
+            questions: payload.questions
+          })
+          // Initialize answers with first option for each question (or empty array for multiSelect)
+          const initialAnswers: Record<string, string | string[]> = {}
+          for (const q of payload.questions) {
+            if (q.multiSelect) {
+              initialAnswers[q.header] = []
+            } else {
+              initialAnswers[q.header] = q.options[0]?.label ?? ''
+            }
+          }
+          setQuestionAnswers(initialAnswers)
         }
       } catch (error) {
         setMessages((prev) => [
@@ -535,6 +594,47 @@ export default function App() {
     wsRef.current?.send(JSON.stringify(payload))
     setInputText('')
     setPendingFiles([])
+  }
+
+  const respondToPermission = (allow: boolean, allowForSession = false) => {
+    if (!permissionRequest) return
+    wsRef.current?.send(JSON.stringify({
+      type: 'permission_response',
+      requestId: permissionRequest.requestId,
+      allow,
+      allowForSession,
+      suggestions: allowForSession ? permissionRequest.suggestions : undefined
+    }))
+    setPermissionRequest(null)
+  }
+
+  const respondToQuestion = () => {
+    if (!questionRequest) return
+    // Convert string[] answers back to comma-separated strings for the server
+    const normalizedAnswers: Record<string, string> = {}
+    for (const [key, value] of Object.entries(questionAnswers)) {
+      normalizedAnswers[key] = Array.isArray(value) ? value.join(', ') : value
+    }
+    wsRef.current?.send(JSON.stringify({
+      type: 'question_response',
+      requestId: questionRequest.requestId,
+      answers: normalizedAnswers
+    }))
+    setQuestionRequest(null)
+    setQuestionAnswers({})
+  }
+
+  const toggleQuestionOption = (header: string, label: string, multiSelect: boolean) => {
+    setQuestionAnswers(prev => {
+      if (multiSelect) {
+        const current = Array.isArray(prev[header]) ? prev[header] as string[] : []
+        if (current.includes(label)) {
+          return { ...prev, [header]: current.filter(l => l !== label) }
+        }
+        return { ...prev, [header]: [...current, label] }
+      }
+      return { ...prev, [header]: label }
+    })
   }
 
   const handleKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (event) => {
@@ -1421,6 +1521,78 @@ export default function App() {
           </svg>
         </button>
       </div>
+
+      {permissionRequest && (
+        <div className="permission-modal">
+          <div className="permission-content">
+            <h3>Permission Request</h3>
+            <p className="permission-tool">
+              <strong>{permissionRequest.toolName}</strong>
+            </p>
+            {permissionRequest.decisionReason && (
+              <p className="permission-reason">{permissionRequest.decisionReason}</p>
+            )}
+            {permissionRequest.blockedPath && (
+              <p className="permission-path">
+                Path: <code>{permissionRequest.blockedPath}</code>
+              </p>
+            )}
+            <details className="permission-input">
+              <summary>Tool Input</summary>
+              <pre>{JSON.stringify(permissionRequest.toolInput, null, 2)}</pre>
+            </details>
+            <div className="permission-actions">
+              <button onClick={() => respondToPermission(false)} className="btn-deny">
+                Deny
+              </button>
+              <button onClick={() => respondToPermission(true)} className="btn-allow">
+                Allow
+              </button>
+              {permissionRequest.suggestions && permissionRequest.suggestions.length > 0 && (
+                <button onClick={() => respondToPermission(true, true)} className="btn-allow-session">
+                  Allow for Session
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {questionRequest && (
+        <div className="question-modal">
+          <div className="question-content">
+            <h3>Claude needs your input</h3>
+            {questionRequest.questions.map((q, i) => {
+              const currentAnswer = questionAnswers[q.header]
+              const selectedLabels = Array.isArray(currentAnswer) ? currentAnswer : [currentAnswer]
+              return (
+                <div key={i} className="question-item">
+                  <p className="question-header">{q.header}</p>
+                  <p className="question-text">{q.question}</p>
+                  <div className="question-options">
+                    {q.options.map((opt, j) => (
+                      <button
+                        key={j}
+                        type="button"
+                        className={selectedLabels.includes(opt.label) ? 'option selected' : 'option'}
+                        onClick={() => toggleQuestionOption(q.header, opt.label, q.multiSelect)}
+                      >
+                        <span className="option-label">{opt.label}</span>
+                        <span className="option-desc">{opt.description}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+            <div className="question-actions">
+              <button onClick={respondToQuestion} className="btn-submit">
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <footer className="composer">
         {pendingFiles.length > 0 ? (

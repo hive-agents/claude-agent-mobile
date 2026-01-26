@@ -3,7 +3,7 @@ import crypto from 'crypto'
 import http, { type IncomingMessage, type ServerResponse } from 'http'
 import https from 'https'
 import type { Duplex } from 'stream'
-import { query, type PermissionMode, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import { query, type Query, type PermissionMode, type PermissionResult, type PermissionUpdate, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import {
   getBootstrapState,
   listConversations,
@@ -24,6 +24,8 @@ type ClientMessage =
   | { type: 'new_conversation'; project?: string }
   | { type: 'list_dirs'; path?: string | null }
   | { type: 'send_prompt'; text: string; attachments?: Attachment[]; model?: string; planMode?: boolean }
+  | { type: 'permission_response'; requestId: string; allow: boolean; allowForSession?: boolean; suggestions?: PermissionUpdate[] }
+  | { type: 'question_response'; requestId: string; answers: Record<string, string> }
 
 const PORT = Number(process.env.CAM_MOBILE_PORT ?? process.env.PORT ?? 8787)
 const WS_PATH = process.env.CAM_MOBILE_WS_PATH ?? '/cam-ws'
@@ -419,6 +421,19 @@ wss.on('connection', (socket: WebSocket) => {
   let activeProject: string | null = null
   let activeModel = DEFAULT_MODEL
   let isStreaming = false
+  let activeQuery: Query | null = null
+
+  const pendingPermissions = new Map<string, {
+    resolve: (result: PermissionResult) => void
+    toolName: string
+    toolUseID: string
+    toolInput: Record<string, unknown>
+  }>()
+
+  const pendingQuestions = new Map<string, {
+    resolve: (answers: Record<string, string>) => void
+    toolUseId: string
+  }>()
 
   const send = (payload: unknown) => {
     socket.send(JSON.stringify(payload))
@@ -491,6 +506,35 @@ wss.on('connection', (socket: WebSocket) => {
       return
     }
 
+    if (parsed.type === 'permission_response') {
+      const pending = pendingPermissions.get(parsed.requestId)
+      if (pending) {
+        pendingPermissions.delete(parsed.requestId)
+        // Note: SDK automatically adds toolUseID to the response, so we don't include it here
+        const result: PermissionResult = parsed.allow
+          ? {
+              behavior: 'allow',
+              updatedInput: pending.toolInput,
+              updatedPermissions: parsed.allowForSession ? parsed.suggestions : undefined
+            }
+          : { behavior: 'deny', message: 'User denied permission' }
+        console.log('[permission_response] allow:', parsed.allow, 'allowForSession:', parsed.allowForSession)
+        console.log('[permission_response] suggestions:', JSON.stringify(parsed.suggestions, null, 2))
+        console.log('[permission_response] result:', JSON.stringify(result, null, 2))
+        pending.resolve(result)
+      }
+      return
+    }
+
+    if (parsed.type === 'question_response') {
+      const pending = pendingQuestions.get(parsed.requestId)
+      if (pending) {
+        pendingQuestions.delete(parsed.requestId)
+        pending.resolve(parsed.answers)
+      }
+      return
+    }
+
     if (parsed.type === 'send_prompt') {
       if (isStreaming) {
         send({ type: 'error', error: 'A response is already streaming.' })
@@ -543,7 +587,45 @@ wss.on('connection', (socket: WebSocket) => {
           model: requestedModel ?? activeModel,
           permissionMode,
           cwd: resolveQueryCwd(),
-          ...(activeSessionId ? { resume: activeSessionId } : {})
+          ...(activeSessionId ? { resume: activeSessionId } : {}),
+          canUseTool: async (
+            toolName: string,
+            input: Record<string, unknown>,
+            { signal, blockedPath, decisionReason, toolUseID, suggestions }: {
+              signal: AbortSignal
+              blockedPath?: string
+              decisionReason?: string
+              toolUseID: string
+              suggestions?: PermissionUpdate[]
+            }
+          ): Promise<PermissionResult> => {
+            const requestId = crypto.randomUUID()
+
+            console.log('[canUseTool] toolName:', toolName)
+            console.log('[canUseTool] toolUseID:', toolUseID)
+            console.log('[canUseTool] suggestions:', JSON.stringify(suggestions, null, 2))
+
+            send({
+              type: 'permission_request',
+              requestId,
+              toolName,
+              toolInput: input,
+              blockedPath,
+              decisionReason,
+              toolUseID,
+              suggestions
+            })
+
+            return new Promise<PermissionResult>((resolve) => {
+              pendingPermissions.set(requestId, { resolve, toolName, toolUseID, toolInput: input })
+
+              signal.addEventListener('abort', () => {
+                pendingPermissions.delete(requestId)
+                // Note: SDK automatically adds toolUseID to the response
+                resolve({ behavior: 'deny', message: 'Request cancelled' })
+              })
+            })
+          }
         }
 
         // Use SDKUserMessage for multimodal content (images), string for text-only
@@ -558,8 +640,59 @@ wss.on('connection', (socket: WebSocket) => {
             })()
           : textPrompt
 
-        for await (const msg of query({ prompt, options })) {
+        const queryResult = query({ prompt, options })
+        activeQuery = queryResult
+
+        for await (const msg of queryResult) {
           if (msg.session_id) activeSessionId = msg.session_id
+
+          // Check if this is an AskUserQuestion tool_use
+          if (msg.type === 'assistant' && msg.message.content) {
+            for (const block of msg.message.content) {
+              if (block.type === 'tool_use' && block.name === 'AskUserQuestion') {
+                const requestId = crypto.randomUUID()
+                const input = block.input as {
+                  questions: Array<{
+                    question: string
+                    header: string
+                    options: Array<{ label: string; description: string }>
+                    multiSelect: boolean
+                  }>
+                }
+
+                // Send question to frontend
+                send({
+                  type: 'user_question',
+                  requestId,
+                  toolUseId: block.id,
+                  questions: input.questions
+                })
+
+                // Wait for user response
+                const answers = await new Promise<Record<string, string>>((resolve) => {
+                  pendingQuestions.set(requestId, { resolve, toolUseId: block.id })
+                })
+
+                // Stream the tool_result back to SDK
+                await activeQuery?.streamInput((async function* () {
+                  yield {
+                    type: 'user',
+                    message: {
+                      role: 'user',
+                      content: [{
+                        type: 'tool_result',
+                        tool_use_id: block.id,
+                        content: JSON.stringify({ answers })
+                      }]
+                    },
+                    parent_tool_use_id: null,
+                    session_id: activeSessionId ?? ''
+                  } as SDKUserMessage
+                })())
+              }
+            }
+          }
+
           const uiMessage = sdkMessageToUI(msg)
           if (uiMessage) send({ type: 'message', message: uiMessage })
         }
@@ -569,6 +702,7 @@ wss.on('connection', (socket: WebSocket) => {
         send({ type: 'error', error: 'Failed to send prompt to Claude.' })
       } finally {
         isStreaming = false
+        activeQuery = null
         send({ type: 'processing', active: false })
       }
     }
