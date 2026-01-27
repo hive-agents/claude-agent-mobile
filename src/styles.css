@@ -670,9 +670,13 @@ body::before {
   width: 100%;
   max-width: 100%;
   overflow: hidden;
-  clip-path: inset(calc(-1 * var(--composer-action-lift)) 0 0 0);
   position: relative;
   z-index: 12;
+}
+
+.composer.focused {
+  padding-top: calc(12px + var(--composer-action-lift));
+  margin-top: calc(-1 * var(--composer-action-lift));
 }
 
 .composer-inner {
