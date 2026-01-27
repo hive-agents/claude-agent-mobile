@@ -394,6 +394,43 @@ export async function listDirectories(requestPath?: string | null): Promise<Dire
   }
 }
 
+export async function createDirectory(parentPath: string | null | undefined, name: string) {
+  const basePath = parentPath ? clampToRoot(parentPath) : ROOT_DIR
+  const trimmed = name.trim()
+  if (!trimmed) {
+    throw new Error('Folder name is required.')
+  }
+  if (trimmed === '.' || trimmed === '..') {
+    throw new Error('Folder name is invalid.')
+  }
+  if (/[\\/]/.test(trimmed)) {
+    throw new Error('Folder name cannot include / or \\.')
+  }
+  if (trimmed.includes('\0')) {
+    throw new Error('Folder name is invalid.')
+  }
+
+  const nextPath = path.join(basePath, trimmed)
+  const resolved = clampToRoot(nextPath)
+  if (resolved !== nextPath) {
+    throw new Error('Folder name is invalid.')
+  }
+
+  try {
+    await fs.mkdir(nextPath)
+  } catch (error: any) {
+    if (error?.code === 'EEXIST') {
+      throw new Error('Folder already exists.')
+    }
+    if (error?.code === 'ENOENT') {
+      throw new Error('Parent folder does not exist.')
+    }
+    throw new Error('Unable to create folder.')
+  }
+
+  return { path: nextPath }
+}
+
 export async function loadConversation(sessionId: string, project?: string) {
   const filePath = await resolveSessionFile(sessionId, project)
   if (!filePath) return { messages: [] as UIMessage[], model: null }

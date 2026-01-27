@@ -9,6 +9,7 @@ import {
   listConversations,
   loadConversation,
   listDirectories,
+  createDirectory,
   watchConversations,
   type UIBlock,
   type UIMessage
@@ -54,6 +55,7 @@ type ClientMessage =
   | { type: 'select_conversation'; sessionId: string; project?: string }
   | { type: 'new_conversation'; project?: string }
   | { type: 'list_dirs'; path?: string | null }
+  | { type: 'create_dir'; parent?: string | null; name: string }
   | { type: 'send_prompt'; text: string; attachments?: Attachment[]; model?: string; planMode?: boolean }
   | { type: 'permission_response'; requestId: string; allow: boolean; allowForSession?: boolean; suggestions?: PermissionUpdate[] }
   | { type: 'question_response'; requestId: string; answers: Record<string, string> }
@@ -568,6 +570,17 @@ wss.on('connection', (socket: WebSocket) => {
     if (parsed.type === 'list_dirs') {
       const listing = await listDirectories(parsed.path)
       send({ type: 'dir_list', ...listing })
+      return
+    }
+
+    if (parsed.type === 'create_dir') {
+      try {
+        const created = await createDirectory(parsed.parent ?? null, parsed.name)
+        send({ type: 'dir_created', path: created.path })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to create folder.'
+        send({ type: 'dir_error', error: message })
+      }
       return
     }
 

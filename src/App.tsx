@@ -138,6 +138,8 @@ type ServerPayload =
       parent: string | null
       entries: string[]
     }
+  | { type: 'dir_created'; path: string }
+  | { type: 'dir_error'; error: string }
   | { type: 'message'; message: ChatMessage }
   | { type: 'processing'; active: boolean }
   | { type: 'conversations'; conversations: ConversationSummary[] }
@@ -233,6 +235,10 @@ export default function App() {
   const [dirEntries, setDirEntries] = useState<string[]>([])
   const [dirLoading, setDirLoading] = useState(false)
   const [dirError, setDirError] = useState<string | null>(null)
+  const [createDirOpen, setCreateDirOpen] = useState(false)
+  const [createDirName, setCreateDirName] = useState('')
+  const [createDirError, setCreateDirError] = useState<string | null>(null)
+  const [createDirLoading, setCreateDirLoading] = useState(false)
   const [authMode, setAuthMode] = useState<'off' | 'builtin' | 'external' | 'unknown'>('unknown')
   const [authAuthorized, setAuthAuthorized] = useState(true)
   const [authSalt, setAuthSalt] = useState<string | null>(null)
@@ -295,6 +301,7 @@ export default function App() {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const createDirInputRef = useRef<HTMLInputElement | null>(null)
   const conversationSearchInputRef = useRef<HTMLInputElement | null>(null)
   const drawerRef = useRef<HTMLElement | null>(null)
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -439,6 +446,25 @@ export default function App() {
           setDirEntries(payload.entries)
           setDirLoading(false)
           setDirError(null)
+        }
+        if (payload.type === 'dir_created') {
+          const createdPath = payload.path
+          setCreateDirLoading(false)
+          setCreateDirError(null)
+          setCreateDirName('')
+          setCreateDirOpen(false)
+          wsRef.current?.send(JSON.stringify({ type: 'new_conversation', project: createdPath }))
+          setMessages([])
+          setActiveSessionId(null)
+          setCurrentProject(createdPath)
+          setProjectPickerOpen(false)
+          setSearchOpen(false)
+          setSearchQuery('')
+          setPendingNewConversationProject(createdPath)
+        }
+        if (payload.type === 'dir_error') {
+          setCreateDirLoading(false)
+          setCreateDirError(payload.error || 'Unable to create folder.')
         }
         if (payload.type === 'message') {
           setMessages((prev) => [...prev, payload.message])
@@ -786,6 +812,12 @@ export default function App() {
   }, [searchOpen])
 
   useEffect(() => {
+    if (createDirOpen) {
+      createDirInputRef.current?.focus()
+    }
+  }, [createDirOpen])
+
+  useEffect(() => {
     if (conversationSearchOpen) {
       conversationSearchInputRef.current?.focus()
     }
@@ -842,6 +874,7 @@ export default function App() {
     setDirError(null)
     setDirEntries([])
     setDirParent(null)
+    setCreateDirError(null)
     wsRef.current?.send(JSON.stringify({ type: 'list_dirs', path }))
   }
 
@@ -980,6 +1013,10 @@ export default function App() {
     setProjectPickerOpen(true)
     setSearchOpen(false)
     setSearchQuery('')
+    setCreateDirOpen(false)
+    setCreateDirName('')
+    setCreateDirError(null)
+    setCreateDirLoading(false)
     requestDirList(null)
   }
 
@@ -987,10 +1024,18 @@ export default function App() {
     setProjectPickerOpen(false)
     setSearchOpen(false)
     setSearchQuery('')
+    setCreateDirOpen(false)
+    setCreateDirName('')
+    setCreateDirError(null)
+    setCreateDirLoading(false)
   }
 
   const handleNavigateDir = (entry: string) => {
     if (!dirPath) return
+    setCreateDirOpen(false)
+    setCreateDirName('')
+    setCreateDirError(null)
+    setCreateDirLoading(false)
     requestDirList(`${dirPath}/${entry}`, { resetSearch: true })
   }
 
@@ -1003,7 +1048,37 @@ export default function App() {
     setProjectPickerOpen(false)
     setSearchOpen(false)
     setSearchQuery('')
+    setCreateDirOpen(false)
+    setCreateDirName('')
+    setCreateDirError(null)
+    setCreateDirLoading(false)
     setPendingNewConversationProject(dirPath)
+  }
+
+  const handleOpenCreateDir = () => {
+    if (!dirPath || dirLoading) return
+    setCreateDirOpen(true)
+    setCreateDirName('')
+    setCreateDirError(null)
+  }
+
+  const handleCancelCreateDir = () => {
+    setCreateDirOpen(false)
+    setCreateDirName('')
+    setCreateDirError(null)
+    setCreateDirLoading(false)
+  }
+
+  const handleCreateDirSubmit = () => {
+    if (!dirPath || createDirLoading) return
+    const name = createDirName.trim()
+    if (!name) {
+      setCreateDirError('Enter a folder name.')
+      return
+    }
+    setCreateDirLoading(true)
+    setCreateDirError(null)
+    wsRef.current?.send(JSON.stringify({ type: 'create_dir', parent: dirPath, name }))
   }
 
   const handleToggleSearch = () => {
@@ -1656,7 +1731,56 @@ export default function App() {
           >
             Use this folder
           </button>
+          <button
+            type="button"
+            className="project-action"
+            onClick={handleOpenCreateDir}
+            disabled={!dirPath || dirLoading}
+            aria-pressed={createDirOpen}
+          >
+            New folder
+          </button>
         </div>
+        {createDirOpen ? (
+          <div className="project-create">
+            <div className="project-create-row">
+              <input
+                ref={createDirInputRef}
+                value={createDirName}
+                onChange={(event) => setCreateDirName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    handleCreateDirSubmit()
+                  }
+                }}
+                placeholder="Folder name"
+                aria-label="Folder name"
+              />
+              <button
+                type="button"
+                className="project-action primary"
+                onClick={handleCreateDirSubmit}
+                disabled={createDirLoading || !createDirName.trim()}
+              >
+                Create
+              </button>
+              <button
+                type="button"
+                className="project-action"
+                onClick={handleCancelCreateDir}
+                disabled={createDirLoading}
+              >
+                Cancel
+              </button>
+            </div>
+            {createDirError ? (
+              <div className="project-create-error" role="alert">
+                {createDirError}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <div className="project-list">
           {dirLoading ? <div className="project-empty">Loading...</div> : null}
           {dirError ? <div className="project-empty">{dirError}</div> : null}

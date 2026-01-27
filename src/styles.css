@@ -938,6 +938,49 @@ body::before {
   border-bottom: 1px solid var(--border);
 }
 
+.project-create {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.project-create-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.project-create input {
+  flex: 1;
+  min-width: 160px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  background: var(--surface-strong);
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-family: var(--font-body);
+  outline: none;
+}
+
+.project-create input:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent 30%);
+  outline-offset: 2px;
+}
+
+.project-create-error {
+  font-size: 0.8rem;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-radius: 10px;
+  padding: 6px 8px;
+}
+
 .project-action {
   border: 1px solid var(--border);
   background: var(--surface-strong);
