@@ -26,6 +26,7 @@ type ClientMessage =
   | { type: 'send_prompt'; text: string; attachments?: Attachment[]; model?: string; planMode?: boolean }
   | { type: 'permission_response'; requestId: string; allow: boolean; allowForSession?: boolean; suggestions?: PermissionUpdate[] }
   | { type: 'question_response'; requestId: string; answers: Record<string, string> }
+  | { type: 'exit_plan_response'; requestId: string; choice: 'auto' | 'manual' | 'deny' }
 
 const PORT = Number(process.env.CAM_MOBILE_PORT ?? process.env.PORT ?? 8787)
 const WS_PATH = process.env.CAM_MOBILE_WS_PATH ?? '/cam-ws'
@@ -396,6 +397,16 @@ function buildUserMessage(text: string, attachments: Attachment[]): UIMessage {
   }
 }
 
+function buildExitPlanResult(choice: 'auto' | 'manual' | 'deny') {
+  if (choice === 'auto') {
+    return 'User approved the plan and wants edits auto-accepted.'
+  }
+  if (choice === 'manual') {
+    return 'User approved the plan but wants to manually approve edits.'
+  }
+  return 'User declined to exit plan mode.'
+}
+
 function resolveModel(model?: string | null) {
   if (!model) return null
   const trimmed = model.trim()
@@ -432,6 +443,10 @@ wss.on('connection', (socket: WebSocket) => {
 
   const pendingQuestions = new Map<string, {
     resolve: (answers: Record<string, string>) => void
+    toolUseId: string
+  }>()
+  const pendingExitPlans = new Map<string, {
+    resolve: (choice: 'auto' | 'manual' | 'deny') => void
     toolUseId: string
   }>()
 
@@ -531,6 +546,15 @@ wss.on('connection', (socket: WebSocket) => {
       if (pending) {
         pendingQuestions.delete(parsed.requestId)
         pending.resolve(parsed.answers)
+      }
+      return
+    }
+
+    if (parsed.type === 'exit_plan_response') {
+      const pending = pendingExitPlans.get(parsed.requestId)
+      if (pending) {
+        pendingExitPlans.delete(parsed.requestId)
+        pending.resolve(parsed.choice)
       }
       return
     }
@@ -649,6 +673,37 @@ wss.on('connection', (socket: WebSocket) => {
           // Check if this is an AskUserQuestion tool_use
           if (msg.type === 'assistant' && msg.message.content) {
             for (const block of msg.message.content) {
+              if (block.type === 'tool_use' && block.name === 'ExitPlanMode') {
+                const requestId = crypto.randomUUID()
+
+                send({
+                  type: 'exit_plan_request',
+                  requestId,
+                  toolUseId: block.id,
+                  input: block.input ?? {}
+                })
+
+                const choice = await new Promise<'auto' | 'manual' | 'deny'>((resolve) => {
+                  pendingExitPlans.set(requestId, { resolve, toolUseId: block.id })
+                })
+
+                await activeQuery?.streamInput((async function* () {
+                  yield {
+                    type: 'user',
+                    message: {
+                      role: 'user',
+                      content: [{
+                        type: 'tool_result',
+                        tool_use_id: block.id,
+                        content: buildExitPlanResult(choice)
+                      }]
+                    },
+                    parent_tool_use_id: null,
+                    session_id: activeSessionId ?? ''
+                  } as SDKUserMessage
+                })())
+              }
+
               if (block.type === 'tool_use' && block.name === 'AskUserQuestion') {
                 const requestId = crypto.randomUUID()
                 const input = block.input as {

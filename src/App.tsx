@@ -110,6 +110,12 @@ type UserQuestionRequest = {
   }>
 }
 
+type ExitPlanRequest = {
+  requestId: string
+  toolUseId: string
+  input: Record<string, unknown>
+}
+
 type ServerPayload =
   | {
       type: 'bootstrap'
@@ -138,6 +144,7 @@ type ServerPayload =
   | { type: 'error'; error: string }
   | { type: 'permission_request'; requestId: string; toolName: string; toolInput: Record<string, unknown>; blockedPath?: string; decisionReason?: string; toolUseID: string; suggestions?: PermissionRequest['suggestions'] }
   | { type: 'user_question'; requestId: string; toolUseId: string; questions: UserQuestionRequest['questions'] }
+  | { type: 'exit_plan_request'; requestId: string; toolUseId: string; input: Record<string, unknown> }
 
 type AuthStatus = {
   mode: 'off' | 'builtin' | 'external' | string
@@ -258,8 +265,16 @@ export default function App() {
   const [isAtBottom, setIsAtBottom] = useState(true)
   const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null)
   const [questionRequest, setQuestionRequest] = useState<UserQuestionRequest | null>(null)
+  const [exitPlanRequest, setExitPlanRequest] = useState<ExitPlanRequest | null>(null)
   const [questionAnswers, setQuestionAnswers] = useState<Record<string, string | string[]>>({})
   const [seenMessageIds, setSeenMessageIds] = useState<Set<string>>(new Set())
+  const [autoApproveEdits, setAutoApproveEdits] = useState(() => {
+    try {
+      return window.localStorage.getItem('cam_autoApproveEdits') === 'true'
+    } catch {
+      return false
+    }
+  })
 
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<number | null>(null)
@@ -267,6 +282,7 @@ export default function App() {
   const shouldReconnectRef = useRef(true)
   const suppressCloseRef = useRef(false)
   const connectWebSocketRef = useRef<(options?: { force?: boolean }) => void>(() => {})
+  const autoApproveEditsRef = useRef(autoApproveEdits)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
@@ -433,6 +449,18 @@ export default function App() {
           ])
         }
         if (payload.type === 'permission_request') {
+          const toolKey = payload.toolName?.toLowerCase?.() ?? ''
+          const autoApproveTools = new Set(['fileedit', 'filewrite', 'notebookedit'])
+          if (autoApproveEditsRef.current && autoApproveTools.has(toolKey)) {
+            wsRef.current?.send(JSON.stringify({
+              type: 'permission_response',
+              requestId: payload.requestId,
+              allow: true,
+              allowForSession: Boolean(payload.suggestions?.length),
+              suggestions: payload.suggestions
+            }))
+            return
+          }
           setPermissionRequest({
             requestId: payload.requestId,
             toolName: payload.toolName,
@@ -460,6 +488,13 @@ export default function App() {
           }
           setQuestionAnswers(initialAnswers)
         }
+        if (payload.type === 'exit_plan_request') {
+          setExitPlanRequest({
+            requestId: payload.requestId,
+            toolUseId: payload.toolUseId,
+            input: payload.input
+          })
+        }
       } catch (error) {
         setMessages((prev) => [
           ...prev,
@@ -480,6 +515,15 @@ export default function App() {
   useEffect(() => {
     refreshAuthStatus()
   }, [refreshAuthStatus])
+
+  useEffect(() => {
+    autoApproveEditsRef.current = autoApproveEdits
+    try {
+      window.localStorage.setItem('cam_autoApproveEdits', autoApproveEdits ? 'true' : 'false')
+    } catch {
+      // Ignore storage failures (private mode, etc).
+    }
+  }, [autoApproveEdits])
 
   useEffect(() => {
     const root = document.documentElement
@@ -787,6 +831,21 @@ export default function App() {
     }))
     setQuestionRequest(null)
     setQuestionAnswers({})
+  }
+
+  const respondToExitPlan = (choice: 'auto' | 'manual' | 'deny') => {
+    if (!exitPlanRequest) return
+    wsRef.current?.send(JSON.stringify({
+      type: 'exit_plan_response',
+      requestId: exitPlanRequest.requestId,
+      choice
+    }))
+    setExitPlanRequest(null)
+    if (choice === 'auto') {
+      setAutoApproveEdits(true)
+    } else {
+      setAutoApproveEdits(false)
+    }
   }
 
   const toggleQuestionOption = (header: string, label: string, multiSelect: boolean) => {
@@ -1203,7 +1262,7 @@ export default function App() {
     drawerOpen,
     setDrawerOpen,
     drawerRef,
-    disabled: builtinLoginRequired || externalLoginRequired || projectPickerOpen || permissionRequest !== null || questionRequest !== null
+    disabled: builtinLoginRequired || externalLoginRequired || projectPickerOpen || permissionRequest !== null || questionRequest !== null || exitPlanRequest !== null
   })
 
   const connectionBannerText = useMemo(() => {
@@ -1731,71 +1790,115 @@ export default function App() {
       </div>
 
       {permissionRequest && (
-        <div className="permission-modal">
-          <div className="permission-content">
-            <h3>Permission Request</h3>
-            <p className="permission-tool">
-              <strong>{permissionRequest.toolName}</strong>
-            </p>
-            {permissionRequest.decisionReason && (
-              <p className="permission-reason">{permissionRequest.decisionReason}</p>
-            )}
-            {permissionRequest.blockedPath && (
-              <p className="permission-path">
-                Path: <code>{permissionRequest.blockedPath}</code>
-              </p>
-            )}
-            <details className="permission-input">
-              <summary>Tool Input</summary>
-              <pre>{JSON.stringify(permissionRequest.toolInput, null, 2)}</pre>
-            </details>
-            <div className="permission-actions">
+        <div className="sheet-overlay">
+          <div className="sheet permission-sheet">
+            <div className="sheet-handle" aria-hidden="true" />
+            <div className="sheet-header">
+              <h3>Permission request</h3>
+              <p className="sheet-subtitle">{permissionRequest.toolName}</p>
+            </div>
+            <div className="sheet-body">
+              {permissionRequest.decisionReason ? (
+                <p className="permission-reason">{permissionRequest.decisionReason}</p>
+              ) : null}
+              {permissionRequest.blockedPath ? (
+                <p className="permission-path">
+                  Path: <code>{permissionRequest.blockedPath}</code>
+                </p>
+              ) : null}
+              <details className="permission-input">
+                <summary>Tool Input</summary>
+                <pre>{JSON.stringify(permissionRequest.toolInput, null, 2)}</pre>
+              </details>
+            </div>
+            <div className="sheet-actions">
               <button onClick={() => respondToPermission(false)} className="btn-deny">
                 Deny
               </button>
               <button onClick={() => respondToPermission(true)} className="btn-allow">
                 Allow
               </button>
-              {permissionRequest.suggestions && permissionRequest.suggestions.length > 0 && (
+              {permissionRequest.suggestions && permissionRequest.suggestions.length > 0 ? (
                 <button onClick={() => respondToPermission(true, true)} className="btn-allow-session">
                   Allow for Session
                 </button>
-              )}
+              ) : null}
             </div>
           </div>
         </div>
       )}
 
       {questionRequest && (
-        <div className="question-modal">
-          <div className="question-content">
-            <h3>Claude needs your input</h3>
-            {questionRequest.questions.map((q, i) => {
-              const currentAnswer = questionAnswers[q.header]
-              const selectedLabels = Array.isArray(currentAnswer) ? currentAnswer : [currentAnswer]
-              return (
-                <div key={i} className="question-item">
-                  <p className="question-header">{q.header}</p>
-                  <p className="question-text">{q.question}</p>
-                  <div className="question-options">
-                    {q.options.map((opt, j) => (
-                      <button
-                        key={j}
-                        type="button"
-                        className={selectedLabels.includes(opt.label) ? 'option selected' : 'option'}
-                        onClick={() => toggleQuestionOption(q.header, opt.label, q.multiSelect)}
-                      >
-                        <span className="option-label">{opt.label}</span>
-                        <span className="option-desc">{opt.description}</span>
-                      </button>
-                    ))}
+        <div className="sheet-overlay">
+          <div className="sheet question-sheet">
+            <div className="sheet-handle" aria-hidden="true" />
+            <div className="sheet-header">
+              <h3>Claude needs your input</h3>
+            </div>
+            <div className="sheet-body">
+              {questionRequest.questions.map((q, i) => {
+                const currentAnswer = questionAnswers[q.header]
+                const selectedLabels = Array.isArray(currentAnswer) ? currentAnswer : [currentAnswer]
+                return (
+                  <div key={i} className="question-item">
+                    <p className="question-header">{q.header}</p>
+                    <p className="question-text">{q.question}</p>
+                    <div className="question-options">
+                      {q.options.map((opt, j) => (
+                        <button
+                          key={j}
+                          type="button"
+                          className={selectedLabels.includes(opt.label) ? 'option selected' : 'option'}
+                          onClick={() => toggleQuestionOption(q.header, opt.label, q.multiSelect)}
+                        >
+                          <span className="option-label">{opt.label}</span>
+                          <span className="option-desc">{opt.description}</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )
-            })}
-            <div className="question-actions">
+                )
+              })}
+            </div>
+            <div className="sheet-actions">
               <button onClick={respondToQuestion} className="btn-submit">
                 Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {exitPlanRequest && (
+        <div className="sheet-overlay">
+          <div className="sheet exit-plan-sheet">
+            <div className="sheet-handle" aria-hidden="true" />
+            <div className="sheet-header">
+              <h3>Exit plan mode?</h3>
+              <p className="sheet-subtitle">Claude is ready to begin edits.</p>
+            </div>
+            {Array.isArray((exitPlanRequest.input as { allowedPrompts?: Array<{ tool: string; prompt: string }> }).allowedPrompts) ? (
+              <div className="sheet-body">
+                <div className="exit-plan-permissions">Requested permissions</div>
+                <div className="exit-plan-list">
+                  {(exitPlanRequest.input as { allowedPrompts?: Array<{ tool: string; prompt: string }> }).allowedPrompts?.map((item, index) => (
+                    <div key={`${item.tool}-${index}`} className="exit-plan-row">
+                      <span className="exit-plan-tool">{item.tool}</span>
+                      <span className="exit-plan-prompt">{item.prompt}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <div className="sheet-actions stacked">
+              <button onClick={() => respondToExitPlan('auto')} className="btn-allow">
+                Yes, auto-accept edits
+              </button>
+              <button onClick={() => respondToExitPlan('manual')} className="btn-allow-session">
+                Yes, manually approve edits
+              </button>
+              <button onClick={() => respondToExitPlan('deny')} className="btn-deny">
+                No
               </button>
             </div>
           </div>

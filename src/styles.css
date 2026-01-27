@@ -1378,10 +1378,10 @@ body::before {
    MODAL ANIMATIONS
    ======================================== */
 
-@keyframes modal-rise {
+@keyframes sheet-rise {
   from {
     opacity: 0;
-    transform: translateY(20px) scale(0.96);
+    transform: translateY(24px) scale(0.98);
   }
   to {
     opacity: 1;
@@ -1398,51 +1398,90 @@ body::before {
   }
 }
 
-.permission-modal {
+.sheet-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.55);
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
   z-index: 1000;
-  padding: 16px;
+  padding: 16px calc(16px + var(--safe-right)) calc(16px + var(--safe-bottom)) calc(16px + var(--safe-left));
   animation: backdrop-fade 0.25s ease forwards;
 }
 
-.permission-content {
+.sheet {
   background: var(--surface);
-  border-radius: 12px;
-  padding: 20px;
-  max-width: 400px;
-  width: 100%;
-  max-height: 80vh;
+  border-radius: 22px;
+  padding: 18px 18px 16px;
+  width: min(560px, 100%);
+  max-height: min(82vh, calc(var(--app-vh) - 24px));
   overflow-y: auto;
-  animation: modal-rise 0.35s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+  animation: sheet-rise 0.35s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
 }
 
-.permission-content h3 {
-  margin: 0 0 12px;
+.sheet-handle {
+  width: 44px;
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border) 60%, transparent 40%);
+  margin: 0 auto 12px;
+}
+
+.sheet-header {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.sheet-header h3 {
+  margin: 0;
   font-size: 1.1rem;
 }
 
-.permission-tool {
-  font-family: var(--font-mono);
-  background: var(--bg);
-  padding: 8px 12px;
-  border-radius: 6px;
-  margin: 0 0 12px;
+.sheet-subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.sheet-body {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.sheet-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sheet-actions.stacked {
+  flex-direction: column;
+}
+
+.sheet-actions button {
+  flex: 1;
+  min-width: 140px;
+  padding: 12px 10px;
+  border: none;
+  border-radius: 12px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .permission-reason {
   color: var(--muted);
   font-size: 0.9rem;
-  margin: 0 0 12px;
+  margin: 0;
 }
 
 .permission-path {
   font-size: 0.85rem;
-  margin: 0 0 12px;
+  margin: 0;
 }
 
 .permission-path code {
@@ -1452,14 +1491,14 @@ body::before {
   word-break: break-all;
 }
 
-.permission-input {
-  margin: 0 0 16px;
-}
-
 .permission-input summary {
   cursor: pointer;
   font-size: 0.85rem;
   color: var(--muted);
+}
+
+.permission-input {
+  margin: 0;
 }
 
 .permission-input pre {
@@ -1469,22 +1508,6 @@ body::before {
   font-size: 0.75rem;
   overflow-x: auto;
   margin: 8px 0 0;
-}
-
-.permission-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.permission-actions button {
-  flex: 1;
-  min-width: 80px;
-  padding: 10px 8px;
-  border: none;
-  border-radius: 8px;
-  font-weight: 600;
-  cursor: pointer;
 }
 
 .btn-deny {
@@ -1500,34 +1523,6 @@ body::before {
 .btn-allow-session {
   background: var(--accent-strong);
   color: white;
-}
-
-.question-modal {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: 16px;
-  animation: backdrop-fade 0.25s ease forwards;
-}
-
-.question-content {
-  background: var(--surface);
-  border-radius: 12px;
-  padding: 20px;
-  max-width: 400px;
-  width: 100%;
-  max-height: 80vh;
-  overflow-y: auto;
-  animation: modal-rise 0.35s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
-}
-
-.question-content h3 {
-  margin: 0 0 16px;
-  font-size: 1.1rem;
 }
 
 .question-item {
@@ -1601,6 +1596,39 @@ body::before {
   color: white;
 }
 
+.exit-plan-permissions {
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.exit-plan-list {
+  display: grid;
+  gap: 8px;
+}
+
+.exit-plan-row {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-strong);
+}
+
+.exit-plan-tool {
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.exit-plan-prompt {
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
 /* ========================================
    ACCESSIBILITY: REDUCED MOTION
    ======================================== */
@@ -1609,10 +1637,8 @@ body::before {
   .chat-item.animate-in,
   .chat-item.animate-in .markdown,
   .chat-item.animate-in .block,
-  .permission-modal,
-  .permission-content,
-  .question-modal,
-  .question-content,
+  .sheet-overlay,
+  .sheet,
   .auth-modal {
     animation: none;
   }
