@@ -660,6 +660,8 @@ body::before {
   width: 100%;
   max-width: 100%;
   overflow: hidden;
+  position: relative;
+  z-index: 6;
 }
 
 .composer-inner {
@@ -704,6 +706,7 @@ body::before {
   top: 50%;
   transform: translateY(-50%);
   transition: transform 0.25s ease, opacity 0.25s ease, top 0.25s ease;
+  z-index: 2;
 }
 
 .composer.focused .composer-inner {
@@ -711,11 +714,8 @@ body::before {
 }
 
 .composer.focused .composer-actions {
-  left: 12px;
-  right: 12px;
-  top: -44px;
-  justify-content: space-between;
-  transform: translateY(0);
+  transform: translateY(calc(-50% - 56px));
+  z-index: 8;
 }
 
 .plan-toggle {
