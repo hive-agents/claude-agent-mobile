@@ -667,10 +667,12 @@ body::before {
   border: 1px solid var(--border);
   border-radius: 18px;
   padding: 10px 12px;
+  padding-right: 168px;
   box-shadow: var(--shadow-soft);
   width: 100%;
   max-width: 100%;
   min-width: 0;
+  position: relative;
 }
 
 .composer textarea {
@@ -679,12 +681,14 @@ body::before {
   background: transparent;
   color: var(--ink);
   font-size: 16px;
+  line-height: 1.4;
   resize: none;
   outline: none;
   min-height: 28px;
   max-height: 140px;
   font-family: var(--font-body);
   overflow-x: hidden;
+  overflow-y: hidden;
   min-width: 0;
 }
 
@@ -692,6 +696,23 @@ body::before {
   display: flex;
   gap: 6px;
   align-items: center;
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  transition: transform 0.25s ease, opacity 0.25s ease, top 0.25s ease;
+}
+
+.composer.focused .composer-inner {
+  padding-right: 12px;
+}
+
+.composer.focused .composer-actions {
+  left: 12px;
+  right: 12px;
+  top: -44px;
+  justify-content: space-between;
+  transform: translateY(0);
 }
 
 .plan-toggle {

@@ -253,6 +253,7 @@ export default function App() {
   const [expandedOther, setExpandedOther] = useState<Record<string, boolean>>({})
   const [isProcessing, setIsProcessing] = useState(false)
   const [inputText, setInputText] = useState('')
+  const [composerFocused, setComposerFocused] = useState(false)
   const [planMode, setPlanMode] = useState(false)
   const [pendingFiles, setPendingFiles] = useState<Array<
     | { type: 'text'; name: string; content: string }
@@ -296,6 +297,8 @@ export default function App() {
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const conversationSearchInputRef = useRef<HTMLInputElement | null>(null)
   const drawerRef = useRef<HTMLElement | null>(null)
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const composerFocusedRef = useRef(false)
 
   const refreshAuthStatus = useCallback(async () => {
     setAuthStatusLoading(true)
@@ -552,6 +555,29 @@ export default function App() {
       // Ignore storage failures (private mode, etc).
     }
   }, [pendingNewConversationProject])
+
+  useEffect(() => {
+    composerFocusedRef.current = composerFocused
+  }, [composerFocused])
+
+  const resizeComposerTextarea = useCallback((node: HTMLTextAreaElement, focused: boolean) => {
+    const style = window.getComputedStyle(node)
+    const lineHeight = Number.parseFloat(style.lineHeight || '20')
+    const minLines = focused ? 2 : 1
+    const maxLines = focused ? 3 : 2
+    const minHeight = Math.max(0, lineHeight * minLines)
+    const maxHeight = Math.max(minHeight, lineHeight * maxLines)
+    node.style.height = 'auto'
+    const nextHeight = Math.min(Math.max(node.scrollHeight, minHeight), maxHeight)
+    node.style.height = `${nextHeight}px`
+    node.style.overflowY = node.scrollHeight > maxHeight ? 'auto' : 'hidden'
+  }, [])
+
+  useEffect(() => {
+    const node = composerTextareaRef.current
+    if (!node) return
+    resizeComposerTextarea(node, composerFocusedRef.current)
+  }, [inputText, resizeComposerTextarea])
 
   useEffect(() => {
     const root = document.documentElement
@@ -1947,7 +1973,7 @@ export default function App() {
         </div>
       )}
 
-      <footer className="composer">
+      <footer className={composerFocused ? 'composer focused' : 'composer'}>
         {pendingFiles.length > 0 ? (
           <div className="file-list">
             {pendingFiles.map((file) => (
@@ -1959,10 +1985,22 @@ export default function App() {
         ) : null}
         <div className="composer-inner">
           <textarea
+            ref={composerTextareaRef}
             placeholder="Send a prompt"
             value={inputText}
-            onChange={(event) => setInputText(event.target.value)}
+            onChange={(event) => {
+              setInputText(event.target.value)
+              resizeComposerTextarea(event.currentTarget, composerFocusedRef.current)
+            }}
             onKeyDown={handleKeyDown}
+            onFocus={(event) => {
+              setComposerFocused(true)
+              resizeComposerTextarea(event.currentTarget, true)
+            }}
+            onBlur={(event) => {
+              setComposerFocused(false)
+              resizeComposerTextarea(event.currentTarget, false)
+            }}
           />
           <div className="composer-actions">
             <button
