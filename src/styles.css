@@ -711,11 +711,11 @@ body::before {
   display: flex;
   gap: 6px;
   align-items: center;
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(calc(-50% - var(--composer-action-lift)));
-  transition: transform 0.25s ease, opacity 0.25s ease, top 0.25s ease;
+  position: fixed;
+  right: var(--composer-actions-right, calc(28px + var(--safe-right)));
+  top: var(--composer-actions-top, auto);
+  transform: none;
+  transition: top 0.25s ease, right 0.25s ease, opacity 0.25s ease;
   z-index: 13;
 }
 
@@ -724,12 +724,6 @@ body::before {
 }
 
 .composer.focused .composer-actions {
-  position: fixed;
-  right: var(--composer-actions-right, calc(28px + var(--safe-right)));
-  top: var(--composer-actions-top, auto);
-  bottom: auto;
-  left: auto;
-  transform: none;
   z-index: 13;
 }
 

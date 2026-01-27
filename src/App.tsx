@@ -598,12 +598,6 @@ export default function App() {
   }, [inputText, resizeComposerTextarea])
 
   useEffect(() => {
-    const root = document.documentElement
-    if (!composerFocused) {
-      root.style.removeProperty('--composer-actions-right')
-      root.style.removeProperty('--composer-actions-top')
-      return
-    }
     const raf = window.requestAnimationFrame(updateComposerActionsPosition)
     const handleResize = () => updateComposerActionsPosition()
     window.addEventListener('resize', handleResize)
@@ -617,6 +611,10 @@ export default function App() {
       window.visualViewport?.removeEventListener('resize', handleResize)
       window.visualViewport?.removeEventListener('scroll', handleResize)
     }
+  }, [updateComposerActionsPosition])
+
+  useEffect(() => {
+    updateComposerActionsPosition()
   }, [composerFocused, updateComposerActionsPosition])
 
   useEffect(() => {
@@ -2037,6 +2035,7 @@ export default function App() {
             }}
             onKeyDown={handleKeyDown}
             onFocus={(event) => {
+              updateComposerActionsPosition()
               setComposerFocused(true)
               resizeComposerTextarea(event.currentTarget, true)
             }}
