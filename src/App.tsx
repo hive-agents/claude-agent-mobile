@@ -587,9 +587,11 @@ export default function App() {
     const layoutWidth = window.innerWidth
     const layoutHeight = window.innerHeight
     const rightInset = 12
-    const lift = composerFocusedRef.current ? 56 : 0
     const right = Math.max(0, layoutWidth - (innerRect.right + offsetLeft) + rightInset)
-    const rawTop = innerRect.top + offsetTop + innerRect.height / 2 - rect.height / 2 - lift
+    const gap = 8
+    const rawTop = composerFocusedRef.current
+      ? innerRect.top + offsetTop - rect.height - gap
+      : innerRect.top + offsetTop + (innerRect.height - rect.height) / 2
     const top = Math.min(Math.max(0, rawTop), layoutHeight - rect.height)
     const root = document.documentElement
     root.style.setProperty('--composer-actions-right', `${right}px`)
