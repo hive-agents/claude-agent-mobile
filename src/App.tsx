@@ -1332,7 +1332,7 @@ export default function App() {
   const showScrollJumps = !overlayOpen && !isAtTop && !isAtBottom
 
   return (
-    <div className="app">
+    <div className={composerFocused ? 'app composer-focused' : 'app'}>
       <div className="safe-top-glass" aria-hidden="true" />
       {connectionBannerText ? (
         <div className="connection-banner">{connectionBannerText}</div>

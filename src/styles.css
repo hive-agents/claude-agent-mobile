@@ -125,6 +125,7 @@ body::before {
 }
 
 .app {
+  --composer-action-lift: 0px;
   position: relative;
   display: grid;
   grid-template-rows: 1fr auto;
@@ -133,6 +134,10 @@ body::before {
   width: var(--app-vw);
   max-width: var(--app-vw);
   overflow: hidden;
+}
+
+.app.composer-focused {
+  --composer-action-lift: 56px;
 }
 
 .app-header {
@@ -656,7 +661,6 @@ body::before {
 }
 
 .composer {
-  --composer-action-lift: 0px;
   padding-top: 12px;
   padding-right: calc(16px + var(--safe-right));
   padding-bottom: calc(18px + var(--safe-bottom));
@@ -665,14 +669,10 @@ body::before {
   background: transparent;
   width: 100%;
   max-width: 100%;
-  overflow: visible;
+  overflow: hidden;
   clip-path: inset(calc(-1 * var(--composer-action-lift)) 0 0 0);
   position: relative;
   z-index: 12;
-}
-
-.composer.focused {
-  --composer-action-lift: 56px;
 }
 
 .composer-inner {
@@ -1401,7 +1401,7 @@ body::before {
 .scroll-jumps {
   position: fixed;
   right: calc(16px + var(--safe-right));
-  bottom: calc(86px + var(--safe-bottom));
+  bottom: calc(86px + var(--safe-bottom) + var(--composer-action-lift));
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1409,7 +1409,7 @@ body::before {
   opacity: 0;
   transform: translateY(8px);
   pointer-events: none;
-  transition: opacity 0.25s ease, transform 0.25s ease;
+  transition: opacity 0.25s ease, transform 0.25s ease, bottom 0.25s ease;
 }
 
 .scroll-jumps.visible {
