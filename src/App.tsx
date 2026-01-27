@@ -275,6 +275,13 @@ export default function App() {
       return false
     }
   })
+  const [pendingNewConversationProject, setPendingNewConversationProject] = useState<string | null>(() => {
+    try {
+      return window.localStorage.getItem('cam_pendingNewConversation')
+    } catch {
+      return null
+    }
+  })
 
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<number | null>(null)
@@ -283,6 +290,7 @@ export default function App() {
   const suppressCloseRef = useRef(false)
   const connectWebSocketRef = useRef<(options?: { force?: boolean }) => void>(() => {})
   const autoApproveEditsRef = useRef(autoApproveEdits)
+  const pendingNewConversationProjectRef = useRef(pendingNewConversationProject)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
@@ -401,6 +409,13 @@ export default function App() {
           const resolvedModel = resolveModelFromServer(payload.model)
           if (resolvedModel) {
             setSelectedModel(resolvedModel)
+          }
+          const pendingProject = pendingNewConversationProjectRef.current
+          if (pendingProject) {
+            setActiveSessionId(null)
+            setMessages([])
+            setCurrentProject(pendingProject)
+            wsRef.current?.send(JSON.stringify({ type: 'new_conversation', project: pendingProject }))
           }
         }
         if (payload.type === 'conversation') {
@@ -524,6 +539,19 @@ export default function App() {
       // Ignore storage failures (private mode, etc).
     }
   }, [autoApproveEdits])
+
+  useEffect(() => {
+    pendingNewConversationProjectRef.current = pendingNewConversationProject
+    try {
+      if (pendingNewConversationProject) {
+        window.localStorage.setItem('cam_pendingNewConversation', pendingNewConversationProject)
+      } else {
+        window.localStorage.removeItem('cam_pendingNewConversation')
+      }
+    } catch {
+      // Ignore storage failures (private mode, etc).
+    }
+  }, [pendingNewConversationProject])
 
   useEffect(() => {
     const root = document.documentElement
@@ -803,6 +831,7 @@ export default function App() {
     wsRef.current?.send(JSON.stringify(payload))
     setInputText('')
     setPendingFiles([])
+    setPendingNewConversationProject(null)
   }
 
   const respondToPermission = (allow: boolean, allowForSession = false) => {
@@ -914,6 +943,7 @@ export default function App() {
     setConversationSearchOpen(false)
     setConversationSearchQuery('')
     setModelMenuOpen(false)
+    setPendingNewConversationProject(null)
   }
 
   const handleNewConversation = () => {
@@ -947,6 +977,7 @@ export default function App() {
     setProjectPickerOpen(false)
     setSearchOpen(false)
     setSearchQuery('')
+    setPendingNewConversationProject(dirPath)
   }
 
   const handleToggleSearch = () => {
