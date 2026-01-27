@@ -1261,6 +1261,46 @@ body::before {
   }
 }
 
+/* ========================================
+   MESSAGE POP-IN ANIMATION
+   ======================================== */
+
+@keyframes message-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.chat-item.animate-in {
+  animation: message-pop-in 0.35s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+}
+
+/* Staggered animation for content blocks within new messages */
+.chat-item.animate-in .markdown,
+.chat-item.animate-in .block {
+  animation: message-pop-in 0.3s cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
+}
+
+.chat-item.animate-in .markdown:nth-child(2),
+.chat-item.animate-in .block:nth-child(2) {
+  animation-delay: 40ms;
+}
+
+.chat-item.animate-in .markdown:nth-child(3),
+.chat-item.animate-in .block:nth-child(3) {
+  animation-delay: 80ms;
+}
+
+.chat-item.animate-in .markdown:nth-child(n+4),
+.chat-item.animate-in .block:nth-child(n+4) {
+  animation-delay: 120ms;
+}
+
 .status-pill {
   font-size: 0.7rem;
   color: var(--muted);
@@ -1334,6 +1374,30 @@ body::before {
   height: 20px;
 }
 
+/* ========================================
+   MODAL ANIMATIONS
+   ======================================== */
+
+@keyframes modal-rise {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes backdrop-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 .permission-modal {
   position: fixed;
   inset: 0;
@@ -1343,6 +1407,7 @@ body::before {
   justify-content: center;
   z-index: 1000;
   padding: 16px;
+  animation: backdrop-fade 0.25s ease forwards;
 }
 
 .permission-content {
@@ -1353,6 +1418,7 @@ body::before {
   width: 100%;
   max-height: 80vh;
   overflow-y: auto;
+  animation: modal-rise 0.35s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
 }
 
 .permission-content h3 {
@@ -1445,6 +1511,7 @@ body::before {
   justify-content: center;
   z-index: 1000;
   padding: 16px;
+  animation: backdrop-fade 0.25s ease forwards;
 }
 
 .question-content {
@@ -1455,6 +1522,7 @@ body::before {
   width: 100%;
   max-height: 80vh;
   overflow-y: auto;
+  animation: modal-rise 0.35s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
 }
 
 .question-content h3 {
@@ -1531,4 +1599,27 @@ body::before {
   cursor: pointer;
   background: var(--accent);
   color: white;
+}
+
+/* ========================================
+   ACCESSIBILITY: REDUCED MOTION
+   ======================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-item.animate-in,
+  .chat-item.animate-in .markdown,
+  .chat-item.animate-in .block,
+  .permission-modal,
+  .permission-content,
+  .question-modal,
+  .question-content,
+  .auth-modal {
+    animation: none;
+  }
+
+  .drawer,
+  .project-picker,
+  .scrim {
+    transition: none;
+  }
 }

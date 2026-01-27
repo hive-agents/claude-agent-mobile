@@ -259,6 +259,7 @@ export default function App() {
   const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null)
   const [questionRequest, setQuestionRequest] = useState<UserQuestionRequest | null>(null)
   const [questionAnswers, setQuestionAnswers] = useState<Record<string, string | string[]>>({})
+  const [seenMessageIds, setSeenMessageIds] = useState<Set<string>>(new Set())
 
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<number | null>(null)
@@ -380,6 +381,7 @@ export default function App() {
           setConversations(payload.conversations)
           setActiveSessionId(payload.activeConversationId)
           setMessages(payload.messages)
+          setSeenMessageIds(new Set(payload.messages.map((m) => m.id)))
           const resolvedModel = resolveModelFromServer(payload.model)
           if (resolvedModel) {
             setSelectedModel(resolvedModel)
@@ -388,6 +390,7 @@ export default function App() {
         if (payload.type === 'conversation') {
           setActiveSessionId(payload.sessionId)
           setMessages(payload.messages)
+          setSeenMessageIds(new Set(payload.messages.map((m) => m.id)))
           if (payload.currentProject !== undefined) {
             setCurrentProject(payload.currentProject)
           }
@@ -405,6 +408,10 @@ export default function App() {
         }
         if (payload.type === 'message') {
           setMessages((prev) => [...prev, payload.message])
+          // Mark message as seen after animation completes
+          setTimeout(() => {
+            setSeenMessageIds((prev) => new Set([...prev, payload.message.id]))
+          }, 400)
         }
         if (payload.type === 'processing') {
           setIsProcessing(payload.active)
@@ -796,7 +803,9 @@ export default function App() {
   }
 
   const handleKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (event) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    // Don't send on Enter for mobile/touch devices - they should use the send button
+    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0
+    if (event.key === 'Enter' && !event.shiftKey && !isTouchDevice) {
       event.preventDefault()
       sendMessage()
     }
@@ -1590,8 +1599,9 @@ export default function App() {
                     ? 'Tool'
                     : 'System'
             const showRoleLabel = item.role === 'user' || item.role === 'assistant'
+            const isNewMessage = !seenMessageIds.has(item.id)
             return (
-              <div key={item.id} className="chat-item">
+              <div key={item.id} className={`chat-item${isNewMessage ? ' animate-in' : ''}`}>
                 <div className={`message ${roleClass}${item.isIntermediate ? ' intermediate' : ''}`}>
                   {showRoleLabel ? <div className="message-label">{roleLabel}</div> : null}
                   {renderMessageBlocks(item)}
@@ -1606,9 +1616,10 @@ export default function App() {
           const isStackExpanded = !canCollapse || !!expandedStacks[item.id]
           const stackCollapsed = canCollapse && !isStackExpanded
           const entriesToShow = isStackExpanded ? item.entries : toolEntries.slice(0, 1)
+          const isNewToolStack = !seenMessageIds.has(item.id)
 
           return (
-            <div key={item.id} className="chat-item">
+            <div key={item.id} className={`chat-item${isNewToolStack ? ' animate-in' : ''}`}>
               <div className={stackCollapsed ? 'tool-stack stacked' : 'tool-stack'}>
                 <div className="tool-stack-header">
                   <div className="tool-stack-title">
