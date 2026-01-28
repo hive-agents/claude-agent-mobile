@@ -11,6 +11,7 @@ import {
   listDirectories,
   createDirectory,
   watchConversations,
+  type ConversationSummary,
   type UIBlock,
   type UIMessage
 } from './claudeStore.js'
@@ -500,13 +501,47 @@ wss.on('connection', (socket: WebSocket) => {
   let activeModel = DEFAULT_MODEL
   let isStreaming = false
   let activeQuery: Query | null = null
+  let lastConversationSummaries: ConversationSummary[] = []
+  let activeConversationUpdatedAt: number | null = null
+  let lastMessageCount = 0
+  let syncInFlight = false
 
   const send = (payload: unknown) => {
     socket.send(JSON.stringify(payload))
   }
 
+  const syncActiveConversationFromDisk = async (conversations: ConversationSummary[]) => {
+    if (!activeSessionId) return
+    const summary = conversations.find((conversation) => conversation.sessionId === activeSessionId)
+    if (!summary) return
+    if (activeConversationUpdatedAt !== null && summary.updatedAt <= activeConversationUpdatedAt) {
+      return
+    }
+    if (syncInFlight) return
+    syncInFlight = true
+    try {
+      const project = summary.project || activeProject || undefined
+      const { messages, model } = await loadConversation(activeSessionId, project)
+      if (messages.length > lastMessageCount) {
+        const nextMessages = messages.slice(lastMessageCount)
+        lastMessageCount = messages.length
+        for (const message of nextMessages) {
+          send({ type: 'message', message })
+        }
+      }
+      if (model) {
+        activeModel = model
+      }
+      activeConversationUpdatedAt = summary.updatedAt
+    } finally {
+      syncInFlight = false
+    }
+  }
+
   const unsubscribeConversations = watchConversations((conversations) => {
+    lastConversationSummaries = conversations
     send({ type: 'conversations', conversations })
+    void syncActiveConversationFromDisk(conversations)
   })
 
   const resolveQueryCwd = () => {
@@ -531,6 +566,11 @@ wss.on('connection', (socket: WebSocket) => {
       activeSessionId = state.activeConversationId
       activeProject = state.currentProject
       if (state.model) activeModel = state.model
+      lastConversationSummaries = state.conversations
+      activeConversationUpdatedAt = state.activeConversationId
+        ? state.conversations.find((conversation) => conversation.sessionId === state.activeConversationId)?.updatedAt ?? null
+        : null
+      lastMessageCount = state.messages.length
       const modelLabel = resolveModelLabel(state.model ?? activeModel)
       send({
         type: 'bootstrap',
@@ -549,6 +589,10 @@ wss.on('connection', (socket: WebSocket) => {
       activeProject = parsed.project ?? activeProject
       const { messages, model } = await loadConversation(parsed.sessionId, parsed.project)
       if (model) activeModel = model
+      lastMessageCount = messages.length
+      activeConversationUpdatedAt = lastConversationSummaries.find(
+        (conversation) => conversation.sessionId === parsed.sessionId
+      )?.updatedAt ?? null
       const modelLabel = resolveModelLabel(model ?? activeModel)
       send({
         type: 'conversation',
@@ -563,6 +607,8 @@ wss.on('connection', (socket: WebSocket) => {
     if (parsed.type === 'new_conversation') {
       activeSessionId = null
       if (parsed.project) activeProject = parsed.project
+      lastMessageCount = 0
+      activeConversationUpdatedAt = null
       send({ type: 'conversation', sessionId: null, messages: [], currentProject: activeProject })
       return
     }
@@ -667,6 +713,7 @@ wss.on('connection', (socket: WebSocket) => {
       isStreaming = true
       send({ type: 'processing', active: true })
       send({ type: 'message', message: buildUserMessage(parsed.text ?? '', attachments) })
+      lastMessageCount += 1
 
       try {
         const permissionMode: PermissionMode = parsed.planMode ? 'plan' : 'default'
@@ -740,7 +787,10 @@ wss.on('connection', (socket: WebSocket) => {
         activeQuery = queryResult
 
         for await (const msg of queryResult) {
-          if (msg.session_id) activeSessionId = msg.session_id
+          if (msg.session_id && msg.session_id !== activeSessionId) {
+            activeSessionId = msg.session_id
+            activeConversationUpdatedAt = null
+          }
 
           // Check if this is an AskUserQuestion tool_use
           if (msg.type === 'assistant' && msg.message.content) {
@@ -824,7 +874,10 @@ wss.on('connection', (socket: WebSocket) => {
           }
 
           const uiMessage = sdkMessageToUI(msg)
-          if (uiMessage) send({ type: 'message', message: uiMessage })
+          if (uiMessage) {
+            send({ type: 'message', message: uiMessage })
+            lastMessageCount += 1
+          }
         }
         const conversations = await listConversations()
         send({ type: 'conversations', conversations })

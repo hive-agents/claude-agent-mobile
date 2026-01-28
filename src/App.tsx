@@ -306,6 +306,8 @@ export default function App() {
   const drawerRef = useRef<HTMLElement | null>(null)
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const composerFocusedRef = useRef(false)
+  const composerActionsRef = useRef<HTMLDivElement | null>(null)
+  const suppressComposerBlurRef = useRef(false)
 
   const refreshAuthStatus = useCallback(async () => {
     setAuthStatusLoading(true)
@@ -956,6 +958,20 @@ export default function App() {
       event.preventDefault()
       sendMessage()
     }
+  }
+
+  const handleComposerActionMouseDown: React.MouseEventHandler<HTMLButtonElement> = (event) => {
+    suppressComposerBlurRef.current = true
+    event.preventDefault()
+  }
+
+  const handleComposerActionTouchStart: React.TouchEventHandler<HTMLButtonElement> = () => {
+    suppressComposerBlurRef.current = true
+  }
+
+  const runComposerAction = (action: () => void) => {
+    suppressComposerBlurRef.current = false
+    action()
   }
 
   const handleFileChange: React.ChangeEventHandler<HTMLInputElement> = async (event) => {
@@ -2125,15 +2141,28 @@ export default function App() {
               resizeComposerTextarea(event.currentTarget, true)
             }}
             onBlur={(event) => {
+              const nextTarget = event.relatedTarget as HTMLElement | null
+              const relatedAction = nextTarget?.closest?.('[data-composer-action]') as HTMLElement | null
+              const actionType = relatedAction?.dataset.composerAction
+              const keepFocus = actionType === 'keep'
+              if (keepFocus || suppressComposerBlurRef.current) {
+                suppressComposerBlurRef.current = false
+                setComposerFocused(true)
+                requestAnimationFrame(() => composerTextareaRef.current?.focus())
+                return
+              }
               setComposerFocused(false)
               resizeComposerTextarea(event.currentTarget, false)
             }}
           />
-          <div className="composer-actions">
+          <div className="composer-actions" ref={composerActionsRef}>
             <button
               type="button"
               className={planMode ? 'plan-toggle active' : 'plan-toggle'}
-              onClick={() => setPlanMode((prev) => !prev)}
+              onClick={() => runComposerAction(() => setPlanMode((prev) => !prev))}
+              onMouseDown={handleComposerActionMouseDown}
+              onTouchStart={handleComposerActionTouchStart}
+              data-composer-action="keep"
               aria-pressed={planMode}
               aria-label="Toggle plan mode"
             >
@@ -2143,7 +2172,10 @@ export default function App() {
             <button
               type="button"
               className="file-button"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => runComposerAction(() => fileInputRef.current?.click())}
+              onMouseDown={handleComposerActionMouseDown}
+              onTouchStart={handleComposerActionTouchStart}
+              data-composer-action="keep"
               aria-label="Attach file"
             >
               +
@@ -2151,7 +2183,17 @@ export default function App() {
             <button
               type="button"
               className="send-button"
-              onClick={sendMessage}
+              onClick={() => {
+                if (!canSend) return
+                sendMessage()
+                setComposerFocused(false)
+                const node = composerTextareaRef.current
+                if (node) {
+                  node.blur()
+                  resizeComposerTextarea(node, false)
+                }
+              }}
+              data-composer-action="collapse"
               disabled={!canSend}
               aria-label="Send prompt"
             >
