@@ -1,6 +1,6 @@
 # code-agent-mobile
 
-Mobile-first web UI for Claude Code data using Claude Agent SDK with a WebSocket backend.
+Mobile-first web UI & PWA for Claude Code & Codex data using Claude Agent SDK & Codex SDK with a WebSocket backend.
 
 ![cam0](https://github.com/user-attachments/assets/425bcfe0-ee56-4f03-852f-b570e14e3c0c)
 
