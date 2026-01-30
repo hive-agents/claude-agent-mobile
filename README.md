@@ -1,4 +1,4 @@
-# claude-agent-mobile
+# code-agent-mobile
 
 Mobile-first web UI for Claude Code data using Claude Agent SDK with a WebSocket backend.
 

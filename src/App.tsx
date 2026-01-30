@@ -1568,7 +1568,7 @@ export default function App() {
                   See the{' '}
                   <a
                     className="auth-link"
-                    href="https://github.com/hive-agents/claude-agent-mobile"
+                    href="https://github.com/hive-agents/code-agent-mobile"
                     target="_blank"
                     rel="noreferrer"
                   >

@@ -1191,6 +1191,6 @@ wss.on('connection', (socket: WebSocket) => {
 })
 
 server.listen(PORT, () => {
-  console.log(`claude-agent-mobile server listening on ws://localhost:${PORT}${WS_PATH}`)
+  console.log(`code-agent-mobile server listening on ws://localhost:${PORT}${WS_PATH}`)
   console.log(`auth mode: ${AUTH_MODE}`)
 })
