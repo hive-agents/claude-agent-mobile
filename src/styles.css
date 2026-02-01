@@ -23,6 +23,8 @@
   --muted: #756558;
   --accent: #c87b3f;
   --accent-strong: #b5652c;
+  --danger: #c5552f;
+  --danger-strong: #a84424;
   --border: #e2d6c6;
   --shadow: 0 10px 30px rgba(43, 36, 30, 0.08);
   --shadow-soft: 0 6px 18px rgba(43, 36, 30, 0.06);
@@ -39,6 +41,8 @@
     --muted: #b7a696;
     --accent: #d48a50;
     --accent-strong: #e19a62;
+    --danger: #e28864;
+    --danger-strong: #f0a586;
     --border: #3c312b;
     --shadow: 0 18px 40px rgba(10, 8, 7, 0.5);
     --shadow-soft: 0 10px 24px rgba(10, 8, 7, 0.35);
@@ -1182,6 +1186,119 @@ body::before {
   flex: 1;
   text-align: right;
   white-space: nowrap;
+}
+
+.sandbox-picker {
+  position: relative;
+}
+
+.sandbox-toggle {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.sandbox-toggle.danger {
+  border-color: var(--danger);
+  color: var(--danger-strong);
+}
+
+.sandbox-toggle[aria-expanded='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent 75%);
+}
+
+.sandbox-toggle.danger[aria-expanded='true'] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 25%, transparent 75%);
+}
+
+.sandbox-toggle svg {
+  width: 20px;
+  height: 20px;
+}
+
+.sandbox-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  display: grid;
+  gap: 6px;
+  min-width: 220px;
+  padding: 8px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.sandbox-option {
+  border: 1px solid transparent;
+  background: var(--surface-strong);
+  border-radius: 12px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.sandbox-option.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+}
+
+.sandbox-option.danger {
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent 45%);
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+}
+
+.sandbox-option-icon {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  color: var(--accent-strong);
+}
+
+.sandbox-option-icon.danger {
+  color: var(--danger-strong);
+}
+
+.sandbox-option-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.sandbox-option-label {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.sandbox-option-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.sandbox-option-meta {
+  font-size: 0.7rem;
+  color: var(--muted);
+  letter-spacing: 0.02em;
 }
 
 .drawer-search-toggle {

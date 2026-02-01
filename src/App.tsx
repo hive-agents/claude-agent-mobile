@@ -31,6 +31,8 @@ type ConversationSummary = {
   model?: string | null
 }
 
+type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
+
 type ToolEntry = {
   id: string
   name: string
@@ -230,6 +232,18 @@ function providerForModel(model: 'opus-4.5' | 'sonnet-4.5' | 'gpt-5.2-codex' | n
   return 'claude'
 }
 
+const SANDBOX_OPTIONS: Array<{ value: SandboxMode; label: string; description: string }> = [
+  { value: 'read-only', label: 'Read-only', description: 'No file writes' },
+  { value: 'workspace-write', label: 'Workspace write', description: 'Edit inside repo' },
+  { value: 'danger-full-access', label: 'Full access', description: 'No sandbox' }
+]
+
+const SANDBOX_LABELS: Record<SandboxMode, string> = {
+  'read-only': 'Read-only',
+  'workspace-write': 'Workspace write',
+  'danger-full-access': 'Full access'
+}
+
 function renderModelIcon(model?: string | null) {
   const resolved = resolveModelFromServer(model)
   if (resolved === 'opus-4.5') {
@@ -283,6 +297,59 @@ function renderModelIcon(model?: string | null) {
   return null
 }
 
+function renderSandboxIcon(mode: SandboxMode) {
+  if (mode === 'read-only') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect
+          x="5"
+          y="11"
+          width="14"
+          height="9"
+          rx="2"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+        />
+        <path
+          d="M8 11V8a4 4 0 0 1 8 0v3"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </svg>
+    )
+  }
+  if (mode === 'workspace-write') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M4 20h4l10.5-10.5-4-4L4 16v4Z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+        <path d="M13.5 6.5l4 4" fill="none" stroke="currentColor" strokeWidth="2" />
+      </svg>
+    )
+  }
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M12 3 2.5 20h19L12 3Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <line x1="12" y1="9" x2="12" y2="14" stroke="currentColor" strokeWidth="2" />
+      <circle cx="12" cy="17" r="1" fill="currentColor" />
+    </svg>
+  )
+}
+
 function renderMarkdown(text: string) {
   const html = marked.parse(text || '', { async: false }) as string
   return { __html: DOMPurify.sanitize(html) }
@@ -318,7 +385,19 @@ export default function App() {
   const [conversationSearchOpen, setConversationSearchOpen] = useState(false)
   const [conversationSearchQuery, setConversationSearchQuery] = useState('')
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const [sandboxMenuOpen, setSandboxMenuOpen] = useState(false)
   const [selectedModel, setSelectedModel] = useState<'opus-4.5' | 'sonnet-4.5' | 'gpt-5.2-codex'>('sonnet-4.5')
+  const [selectedSandbox, setSelectedSandbox] = useState<SandboxMode>(() => {
+    try {
+      const stored = window.localStorage.getItem('cam_sandboxMode')
+      if (stored === 'read-only' || stored === 'workspace-write' || stored === 'danger-full-access') {
+        return stored
+      }
+    } catch {
+      // Ignore storage failures (private mode, etc).
+    }
+    return 'read-only'
+  })
   const [activeConversationProvider, setActiveConversationProvider] = useState<'claude' | 'codex' | null>(null)
   const [warningMessage, setWarningMessage] = useState<string | null>(null)
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({})
@@ -654,6 +733,14 @@ export default function App() {
   }, [autoApproveEdits])
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem('cam_sandboxMode', selectedSandbox)
+    } catch {
+      // Ignore storage failures (private mode, etc).
+    }
+  }, [selectedSandbox])
+
+  useEffect(() => {
     pendingNewConversationProjectRef.current = pendingNewConversationProject
     try {
       if (pendingNewConversationProject) {
@@ -979,7 +1066,8 @@ export default function App() {
       text: inputText.trim(),
       attachments: pendingFiles,
       model: selectedModel,
-      planMode
+      planMode,
+      sandboxMode: selectedSandbox
     }
     wsRef.current?.send(JSON.stringify(payload))
     setInputText('')
@@ -1123,6 +1211,7 @@ export default function App() {
     setConversationSearchOpen(false)
     setConversationSearchQuery('')
     setModelMenuOpen(false)
+    setSandboxMenuOpen(false)
     setPendingNewConversationProject(null)
   }
 
@@ -1131,6 +1220,7 @@ export default function App() {
     setConversationSearchOpen(false)
     setConversationSearchQuery('')
     setModelMenuOpen(false)
+    setSandboxMenuOpen(false)
     setProjectPickerOpen(true)
     setSearchOpen(false)
     setSearchQuery('')
@@ -1213,6 +1303,7 @@ export default function App() {
 
   const handleToggleConversationSearch = () => {
     setModelMenuOpen(false)
+    setSandboxMenuOpen(false)
     setConversationSearchOpen((prev) => {
       const next = !prev
       if (!next) {
@@ -1232,6 +1323,11 @@ export default function App() {
     }
     setSelectedModel(model)
     setModelMenuOpen(false)
+  }
+
+  const handleSelectSandbox = (mode: SandboxMode) => {
+    setSelectedSandbox(mode)
+    setSandboxMenuOpen(false)
   }
 
   const handleLoginSubmit: React.FormEventHandler<HTMLFormElement> = async (event) => {
@@ -1630,6 +1726,7 @@ export default function App() {
           setConversationSearchOpen(false)
           setConversationSearchQuery('')
           setModelMenuOpen(false)
+          setSandboxMenuOpen(false)
         }}
       />
       <aside ref={drawerRef} className={drawerOpen ? 'drawer open' : 'drawer'}>
@@ -1700,7 +1797,10 @@ export default function App() {
             <button
               type="button"
               className="model-toggle"
-              onClick={() => setModelMenuOpen((prev) => !prev)}
+              onClick={() => {
+                setSandboxMenuOpen(false)
+                setModelMenuOpen((prev) => !prev)
+              }}
               aria-label={`Model: ${selectedModel}`}
               aria-expanded={modelMenuOpen}
               aria-haspopup="menu"
@@ -1838,6 +1938,55 @@ export default function App() {
                   </span>
                   <span className="model-option-label">gpt-5.2-codex</span>
                 </button>
+              </div>
+            ) : null}
+          </div>
+          <div className="sandbox-picker">
+            <button
+              type="button"
+              className={selectedSandbox === 'danger-full-access' ? 'sandbox-toggle danger' : 'sandbox-toggle'}
+              onClick={() => {
+                setModelMenuOpen(false)
+                setSandboxMenuOpen((prev) => !prev)
+              }}
+              aria-label={`Codex sandbox: ${SANDBOX_LABELS[selectedSandbox]}`}
+              aria-expanded={sandboxMenuOpen}
+              aria-haspopup="menu"
+            >
+              {renderSandboxIcon(selectedSandbox)}
+            </button>
+            {sandboxMenuOpen ? (
+              <div className="sandbox-menu" role="menu" aria-label="Select sandbox mode">
+                {SANDBOX_OPTIONS.map((option) => {
+                  const isActive = selectedSandbox === option.value
+                  const isDanger = option.value === 'danger-full-access'
+                  const optionClass = [
+                    'sandbox-option',
+                    isActive ? 'active' : '',
+                    isDanger ? 'danger' : ''
+                  ].filter(Boolean).join(' ')
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={optionClass}
+                      onClick={() => handleSelectSandbox(option.value)}
+                      role="menuitemradio"
+                      aria-checked={isActive}
+                    >
+                      <span
+                        className={isDanger ? 'sandbox-option-icon danger' : 'sandbox-option-icon'}
+                        aria-hidden="true"
+                      >
+                        {renderSandboxIcon(option.value)}
+                      </span>
+                      <span className="sandbox-option-label">
+                        <span className="sandbox-option-title">{option.label}</span>
+                        <span className="sandbox-option-meta">{option.description}</span>
+                      </span>
+                    </button>
+                  )
+                })}
               </div>
             ) : null}
           </div>

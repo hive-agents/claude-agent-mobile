@@ -7,7 +7,7 @@ import os from 'os'
 import path from 'path'
 import type { Duplex } from 'stream'
 import { query, type Query, type PermissionMode, type PermissionResult, type PermissionUpdate, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
-import { Codex, type ThreadItem } from '@openai/codex-sdk'
+import { Codex, type SandboxMode, type ThreadItem } from '@openai/codex-sdk'
 import {
   getBootstrapState,
   listConversations,
@@ -62,7 +62,7 @@ type ClientMessage =
   | { type: 'new_conversation'; project?: string }
   | { type: 'list_dirs'; path?: string | null }
   | { type: 'create_dir'; parent?: string | null; name: string }
-  | { type: 'send_prompt'; text: string; attachments?: Attachment[]; model?: string; planMode?: boolean }
+  | { type: 'send_prompt'; text: string; attachments?: Attachment[]; model?: string; planMode?: boolean; sandboxMode?: SandboxMode }
   | { type: 'permission_response'; requestId: string; allow: boolean; allowForSession?: boolean; suggestions?: PermissionUpdate[] }
   | { type: 'question_response'; requestId: string; answers: Record<string, string> }
   | { type: 'exit_plan_response'; requestId: string; choice: 'auto' | 'manual' | 'deny' }
@@ -631,6 +631,15 @@ function resolveModelLabel(model?: string | null) {
   return null
 }
 
+function resolveSandboxMode(raw?: string | null): SandboxMode | null {
+  if (!raw) return null
+  const normalized = raw.trim().toLowerCase()
+  if (normalized === 'read-only') return 'read-only'
+  if (normalized === 'workspace-write') return 'workspace-write'
+  if (normalized === 'danger-full-access') return 'danger-full-access'
+  return null
+}
+
 function resolveProviderForModel(model?: string | null): ConversationProvider | null {
   if (!model) return null
   const normalized = model.trim().toLowerCase()
@@ -879,6 +888,7 @@ wss.on('connection', (socket: WebSocket) => {
       const textPrompt = buildPrompt(parsed.text ?? '', attachments)
 
       const requestedModel = resolveModel(parsed.model)
+      const requestedSandbox = resolveSandboxMode(parsed.sandboxMode)
       const provider =
         resolveProviderForModel(requestedModel ?? activeModel) ?? activeProvider ?? 'claude'
 
@@ -938,7 +948,8 @@ wss.on('connection', (socket: WebSocket) => {
               model: requestedModel ?? activeModel,
               workingDirectory: cwd,
               skipGitRepoCheck: true,
-              approvalPolicy: 'never' as const
+              approvalPolicy: 'never' as const,
+              ...(requestedSandbox ? { sandboxMode: requestedSandbox } : {})
             }
             const thread = activeSessionId
               ? codex.resumeThread(activeSessionId, threadOptions)
